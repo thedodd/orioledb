@@ -205,8 +205,8 @@ get_extent(BTreeDescr *desc, uint16 len)
 
 	MARK_DIRTY(len_off_tree->ppool, context.items[context.index].blkno);
 
-	if (is_page_too_sparse(desc, p))
-		(void) btree_try_merge_and_unlock(desc,
+	if (is_page_too_sparse(len_off_tree, p))
+		(void) btree_try_merge_and_unlock(len_off_tree,
 										  context.items[context.index].blkno,
 										  false, false);
 	else
