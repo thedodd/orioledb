@@ -54,6 +54,10 @@ typedef enum BTreeKeyType
 	 (keyType) == BTreeKeyUniqueLowerBound || \
 	 (keyType) == BTreeKeyUniqueUpperBound)
 
+#define IS_UNIQUE_BOUND_KEY_TYPE(keyType) \
+	((keyType) == BTreeKeyUniqueLowerBound || \
+	 (keyType) == BTreeKeyUniqueUpperBound)
+
 typedef int (*OBTreeKeyCmp) (BTreeDescr *descr,
 							 void *p1, BTreeKeyType k1,
 							 void *p2, BTreeKeyType k2);
@@ -122,6 +126,10 @@ typedef struct
 							   OTuple newTuple, OXid newOxid);
 	uint32		(*hash) (BTreeDescr *desc, OTuple tuple, BTreeKeyType tupleType);
 	uint32		(*unique_hash) (BTreeDescr *desc, OTuple tuple);
+	bool		(*serialize_bound) (BTreeDescr *desc, Pointer dst,
+									void *ptr, BTreeKeyType keyType);
+	void	   *(*deserialize_bound) (BTreeDescr *desc, Pointer src,
+									  BTreeKeyType keyType);
 	OBTreeKeyCmp cmp;
 } BTreeOps;
 

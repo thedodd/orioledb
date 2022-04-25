@@ -50,6 +50,7 @@ typedef struct
 	bool		(*needs_undo) (BTreeDescr *desc, BTreeOperationType action,
 							   OTuple oldTuple, OTupleXactInfo oldXactInfo, bool oldDeleted,
 							   OTuple newTuple, OXid newOxid);
+	int			boundKeyLen;
 } SysTreeMeta;
 
 typedef struct
@@ -146,6 +147,11 @@ static void free_tree_print(BTreeDescr *desc, StringInfo buf,
 static JsonbValue *free_tree_key_to_jsonb(BTreeDescr *desc, OTuple tup,
 										  JsonbParseState **state);
 
+static bool sys_tree_serialize_bound(BTreeDescr *desc, Pointer dst,
+									 void *ptr, BTreeKeyType keyType);
+static void *sys_tree_deserialize_bound(BTreeDescr *desc, Pointer src,
+										BTreeKeyType keyType);
+
 
 static SysTreeMeta sysTreesMeta[] =
 {
@@ -159,7 +165,8 @@ static SysTreeMeta sysTreesMeta[] =
 		.poolType = OPagePoolMain,
 		.undoReserveType = UndoReserveNone,
 		.storageType = BTreeStorageInMemory,
-		.needs_undo = NULL
+		.needs_undo = NULL,
+		.boundKeyLen = -1
 	},
 	{							/* SYS_TREES_O_TABLES */
 		.keyLength = sizeof(OTableChunkKey),
@@ -172,7 +179,8 @@ static SysTreeMeta sysTreesMeta[] =
 		.poolType = OPagePoolCatalog,
 		.undoReserveType = UndoReserveTxn,
 		.storageType = BTreeStoragePersistence,
-		.needs_undo = o_table_chunk_needs_undo
+		.needs_undo = o_table_chunk_needs_undo,
+		.boundKeyLen = sizeof(OTableChunkKey)
 	},
 	{							/* SYS_TREES_O_INDICES */
 		.keyLength = sizeof(OIndexChunkKey),
@@ -185,7 +193,8 @@ static SysTreeMeta sysTreesMeta[] =
 		.poolType = OPagePoolCatalog,
 		.undoReserveType = UndoReserveTxn,
 		.storageType = BTreeStoragePersistence,
-		.needs_undo = NULL
+		.needs_undo = NULL,
+		.boundKeyLen = sizeof(OIndexChunkKey)
 	},
 	{							/* SYS_TREES_OPCLASSES */
 		.keyLength = sizeof(OOpclassKey),
@@ -197,7 +206,8 @@ static SysTreeMeta sysTreesMeta[] =
 		.poolType = OPagePoolCatalog,
 		.undoReserveType = UndoReserveTxn,
 		.storageType = BTreeStoragePersistence,
-		.needs_undo = NULL
+		.needs_undo = NULL,
+		.boundKeyLen = -1
 	},
 	{							/* SYS_TREES_ENUM_CACHE */
 		.keyLength = sizeof(OTypeToastChunkKey),
@@ -210,7 +220,8 @@ static SysTreeMeta sysTreesMeta[] =
 		.poolType = OPagePoolCatalog,
 		.undoReserveType = UndoReserveTxn,
 		.storageType = BTreeStoragePersistence,
-		.needs_undo = NULL
+		.needs_undo = NULL,
+		.boundKeyLen = sizeof(OTypeToastChunkKey)
 	},
 	{							/* SYS_TREES_ENUMOID_CACHE */
 		.keyLength = sizeof(OTypeKey),
@@ -222,7 +233,8 @@ static SysTreeMeta sysTreesMeta[] =
 		.poolType = OPagePoolCatalog,
 		.undoReserveType = UndoReserveTxn,
 		.storageType = BTreeStoragePersistence,
-		.needs_undo = NULL
+		.needs_undo = NULL,
+		.boundKeyLen = sizeof(OTypeKey)
 	},
 	{							/* SYS_TREES_RANGE_CACHE */
 		.keyLength = sizeof(OTypeKey),
@@ -234,7 +246,8 @@ static SysTreeMeta sysTreesMeta[] =
 		.poolType = OPagePoolCatalog,
 		.undoReserveType = UndoReserveTxn,
 		.storageType = BTreeStoragePersistence,
-		.needs_undo = NULL
+		.needs_undo = NULL,
+		.boundKeyLen = sizeof(OTypeKey)
 	},
 	{							/* SYS_TREES_RECORD_CACHE */
 		.keyLength = sizeof(OTypeToastChunkKey),
@@ -247,7 +260,8 @@ static SysTreeMeta sysTreesMeta[] =
 		.poolType = OPagePoolCatalog,
 		.undoReserveType = UndoReserveTxn,
 		.storageType = BTreeStoragePersistence,
-		.needs_undo = NULL
+		.needs_undo = NULL,
+		.boundKeyLen = sizeof(OTypeToastChunkKey)
 	},
 	{							/* SYS_TREES_TYPE_ELEMENT_CACHE */
 		.keyLength = sizeof(OTypeKey),
@@ -259,7 +273,8 @@ static SysTreeMeta sysTreesMeta[] =
 		.poolType = OPagePoolCatalog,
 		.undoReserveType = UndoReserveTxn,
 		.storageType = BTreeStoragePersistence,
-		.needs_undo = NULL
+		.needs_undo = NULL,
+		.boundKeyLen = sizeof(OTypeKey)
 	},
 	{							/* SYS_TREES_EXTENTS_OFF_LEN */
 		.keyLength = sizeof(FreeTreeTuple),
@@ -271,7 +286,8 @@ static SysTreeMeta sysTreesMeta[] =
 		.poolType = OPagePoolFreeTree,
 		.undoReserveType = UndoReserveNone,
 		.storageType = BTreeStorageTemporary,
-		.needs_undo = NULL
+		.needs_undo = NULL,
+		.boundKeyLen = -1
 	},
 	{							/* SYS_TREES_EXTENTS_LEN_OFF */
 		.keyLength = sizeof(FreeTreeTuple),
@@ -283,7 +299,8 @@ static SysTreeMeta sysTreesMeta[] =
 		.poolType = OPagePoolFreeTree,
 		.undoReserveType = UndoReserveNone,
 		.storageType = BTreeStorageTemporary,
-		.needs_undo = NULL
+		.needs_undo = NULL,
+		.boundKeyLen = -1
 	}
 };
 
@@ -568,6 +585,8 @@ sys_tree_init(int i, bool init_shmem)
 	ops->cmp = meta->cmpFunc;
 	ops->unique_hash = NULL;
 	ops->hash = sys_tree_hash;
+	ops->serialize_bound = sys_tree_serialize_bound;
+	ops->deserialize_bound = sys_tree_deserialize_bound;
 
 	descr->compress = InvalidOCompress;
 	descr->ppool = pool;
@@ -644,7 +663,7 @@ shared_root_info_key_cmp(BTreeDescr *desc,
 	SharedRootInfoKey *key1 = (SharedRootInfoKey *) (((OTuple *) p1)->data);
 	SharedRootInfoKey *key2 = (SharedRootInfoKey *) (((OTuple *) p2)->data);
 
-	Assert(k1 != BTreeKeyBound && k2 != BTreeKeyBound);
+	Assert(!IS_BOUND_KEY_TYPE(k1) && !IS_BOUND_KEY_TYPE(k2));
 
 	if (key1->datoid < key2->datoid)
 		return -1;
@@ -697,6 +716,8 @@ o_table_chunk_cmp(BTreeDescr *desc,
 {
 	OTableChunkKey *key1;
 	OTableChunkKey *key2;
+
+	Assert(!IS_UNIQUE_BOUND_KEY_TYPE(k1) && !IS_UNIQUE_BOUND_KEY_TYPE(k2));
 
 	if (k1 == BTreeKeyBound)
 		key1 = (OTableChunkKey *) p1;
@@ -803,6 +824,8 @@ o_index_chunk_cmp(BTreeDescr *desc,
 	OIndexChunkKey *key1;
 	OIndexChunkKey *key2;
 
+	Assert(!IS_UNIQUE_BOUND_KEY_TYPE(k1) && !IS_UNIQUE_BOUND_KEY_TYPE(k2));
+
 	if (k1 == BTreeKeyBound)
 		key1 = (OIndexChunkKey *) p1;
 	else
@@ -883,8 +906,7 @@ o_opclass_cmp(BTreeDescr *desc,
 	OOpclassKey *key1 = (OOpclassKey *) (((OTuple *) p1)->data);
 	OOpclassKey *key2 = (OOpclassKey *) (((OTuple *) p2)->data);
 
-	Assert(k1 != BTreeKeyBound);
-	Assert(k2 != BTreeKeyBound);
+	Assert(!IS_BOUND_KEY_TYPE(k1) && !IS_BOUND_KEY_TYPE(k2));
 
 	if (key1->datoid != key2->datoid)
 		return key1->datoid < key2->datoid ? -1 : 1;
@@ -954,6 +976,8 @@ o_type_cache_cmp(BTreeDescr *desc, void *p1, BTreeKeyType k1, void *p2,
 
 	OTypeKey	_key;
 	bool		lsn_cmp = true;
+
+	Assert(!IS_UNIQUE_BOUND_KEY_TYPE(k1) && !IS_UNIQUE_BOUND_KEY_TYPE(k2));
 
 	if (k1 == BTreeKeyBound)
 	{
@@ -1058,6 +1082,8 @@ o_type_cache_toast_cmp(BTreeDescr *desc, void *p1, BTreeKeyType k1,
 	Pointer		type_key_cmp_arg1 = NULL,
 				type_key_cmp_arg2 = NULL;
 	int			type_key_cmp_result;
+
+	Assert(!IS_UNIQUE_BOUND_KEY_TYPE(k1) && !IS_UNIQUE_BOUND_KEY_TYPE(k2));
 
 	if (k1 == BTreeKeyBound)
 	{
@@ -1234,9 +1260,16 @@ free_tree_off_len_cmp(BTreeDescr *desc,
 					  void *p1, BTreeKeyType k1,
 					  void *p2, BTreeKeyType k2)
 {
-	FreeTreeTuple *left = (FreeTreeTuple *) ((OTuple *) p1)->data,
-			   *right = (FreeTreeTuple *) ((OTuple *) p2)->data;
-	int			cmp = free_tree_id_cmp(left, right);
+	FreeTreeTuple *left,
+			   *right;
+	int			cmp;
+
+	Assert(!IS_BOUND_KEY_TYPE(k1) && !IS_BOUND_KEY_TYPE(k2));
+
+	left = (FreeTreeTuple *) ((OTuple *) p1)->data;
+	right = (FreeTreeTuple *) ((OTuple *) p2)->data;
+
+	cmp = free_tree_id_cmp(left, right);
 
 	if (cmp != 0)
 		return cmp;
@@ -1260,9 +1293,16 @@ free_tree_len_off_cmp(BTreeDescr *desc,
 					  void *p1, BTreeKeyType k1,
 					  void *p2, BTreeKeyType k2)
 {
-	FreeTreeTuple *left = (FreeTreeTuple *) ((OTuple *) p1)->data,
-			   *right = (FreeTreeTuple *) ((OTuple *) p2)->data;
-	int			cmp = free_tree_id_cmp(left, right);
+	FreeTreeTuple *left,
+			   *right;
+	int			cmp;
+
+	Assert(!IS_BOUND_KEY_TYPE(k1) && !IS_BOUND_KEY_TYPE(k2));
+
+	left = (FreeTreeTuple *) ((OTuple *) p1)->data;
+	right = (FreeTreeTuple *) ((OTuple *) p2)->data;
+
+	cmp = free_tree_id_cmp(left, right);
 
 	if (cmp != 0)
 		return cmp;
@@ -1302,4 +1342,27 @@ free_tree_key_to_jsonb(BTreeDescr *desc, OTuple tup, JsonbParseState **state)
 	jsonb_push_int8_key(state, "offset", key->extent.offset);
 	jsonb_push_int8_key(state, "length", key->extent.length);
 	return pushJsonbValue(state, WJB_END_OBJECT, NULL);
+}
+
+static bool
+sys_tree_serialize_bound(BTreeDescr *desc, Pointer dst,
+						 void *ptr, BTreeKeyType keyType)
+{
+	SysTreeMeta *meta = (SysTreeMeta *) desc->arg;
+
+	Assert(keyType == BTreeKeyBound);
+	Assert(meta->boundKeyLen > 0);
+
+	memcpy(dst, ptr, meta->boundKeyLen);
+
+	return true;
+}
+
+static void *
+sys_tree_deserialize_bound(BTreeDescr *desc, Pointer src,
+						   BTreeKeyType keyType)
+{
+	Assert(keyType == BTreeKeyBound);
+
+	return src;
 }

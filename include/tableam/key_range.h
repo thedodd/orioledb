@@ -54,11 +54,22 @@ typedef struct
 	OBTreeKeyBound high;
 } OBTreeKeyRange;
 
+typedef struct
+{
+	int			nkeys;
+	uint8		flags[FLEXIBLE_ARRAY_MEMBER];
+} OBTreeSerializedKeyBound;
+
+
 extern bool o_key_data_to_key_range(OBTreeKeyRange *res,
 									ScanKeyData *keyData,
 									int numberOfKeys,
 									BTArrayKeyInfo *arrayKeys,
 									int resultNKeys,
 									OIndexField *fields);
+extern bool seriealize_key(BTreeDescr *desc, OSerializedKey *dst,
+						   void *key, BTreeKeyType keyType);
+extern void *deseriealize_key(BTreeDescr *desc,
+							  OSerializedKey *src, BTreeKeyType *keyType);
 
 #endif
