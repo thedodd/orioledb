@@ -210,3 +210,70 @@ o_key_range_is_unbounded(OBTreeKeyRange *range, int attnum)
 	else
 		return false;
 }
+
+bool
+seriealize_key(BTreeDescr *desc, OSerializedKey *dst,
+			   void *key, BTreeKeyType keyType)
+{
+	OTuple	   *tuple = (OTuple *) key;
+	int			tuplen;
+
+	dst->type = keyType;
+	switch (keyType)
+	{
+		case BTreeKeyLeafTuple:
+		case BTreeKeyNonLeafKey:
+		case BTreeKeyPageHiKey:
+			dst->flags = tuple->formatFlags;
+			tuplen = o_btree_len(desc, *tuple,
+								 (keyType == BTreeKeyLeafTuple) ? OTupleLength : OKeyLength);
+			memcpy(dst->data.fixedData, tuple->data, tuplen);
+			return true;
+
+		case BTreeKeyBound:
+		case BTreeKeyUniqueLowerBound:
+		case BTreeKeyUniqueUpperBound:
+			return desc->ops->serialize_bound(desc, dst->data.fixedData,
+											  key, keyType);
+
+		case BTreeKeyNone:
+		case BTreeKeyRightmost:
+			return true;
+
+		default:
+			Assert(false);
+			return false;
+	}
+}
+
+void *
+deseriealize_key(BTreeDescr *desc, OSerializedKey *src, BTreeKeyType *keyType)
+{
+	static OTuple tuple;
+
+	*keyType = src->type;
+
+	switch (src->type)
+	{
+		case BTreeKeyLeafTuple:
+		case BTreeKeyNonLeafKey:
+		case BTreeKeyPageHiKey:
+			tuple.formatFlags = src->flags;
+			tuple.data = src->data.fixedData;
+			return &tuple;
+
+		case BTreeKeyBound:
+		case BTreeKeyUniqueLowerBound:
+		case BTreeKeyUniqueUpperBound:
+			return desc->ops->deserialize_bound(desc, src->data.fixedData,
+												src->type);
+
+		case BTreeKeyNone:
+		case BTreeKeyRightmost:
+			return NULL;
+
+		default:
+			Assert(false);
+			return NULL;
+	}
+}

@@ -50,6 +50,10 @@ static OTuple o_create_key_tuple(BTreeDescr *desc, OTuple tuple,
 static bool pk_needs_undo(BTreeDescr *desc, BTreeOperationType action,
 						  OTuple oldTuple, OTupleXactInfo oldXactInfo,
 						  bool oldDeleted, OTuple newTuple, OXid newOxid);
+static bool o_serialize_bound(BTreeDescr *desc, Pointer dst,
+							  void *ptr, BTreeKeyType keyType);
+static void *o_deserialize_bound(BTreeDescr *desc, Pointer src,
+								 BTreeKeyType keyType);
 
 static BTreeOps primaryOps = {
 	.len = o_idx_len,
@@ -58,7 +62,9 @@ static BTreeOps primaryOps = {
 	.needs_undo = pk_needs_undo,
 	.cmp = o_idx_cmp,
 	.hash = o_idx_hash,
-	.unique_hash = o_idx_unique_hash
+	.unique_hash = o_idx_unique_hash,
+	.serialize_bound = o_serialize_bound,
+	.deserialize_bound = o_deserialize_bound
 },
 
 			secondaryOps = {
@@ -68,7 +74,9 @@ static BTreeOps primaryOps = {
 	.needs_undo = NULL,
 	.cmp = o_idx_cmp,
 	.hash = o_idx_hash,
-	.unique_hash = o_idx_unique_hash
+	.unique_hash = o_idx_unique_hash,
+	.serialize_bound = o_serialize_bound,
+	.deserialize_bound = o_deserialize_bound
 },
 
 			toastOps = {
@@ -78,7 +86,9 @@ static BTreeOps primaryOps = {
 	.needs_undo = o_toast_needs_undo,
 	.cmp = o_toast_cmp,
 	.hash = o_toast_hash,
-	.unique_hash = NULL
+	.unique_hash = NULL,
+	.serialize_bound = o_serialize_bound,
+	.deserialize_bound = o_deserialize_bound
 };
 
 
@@ -892,6 +902,127 @@ pk_needs_undo(BTreeDescr *desc, BTreeOperationType action,
 		return false;
 
 	return true;
+}
+
+static bool
+o_serialize_bound(BTreeDescr *desc, Pointer dst,
+				  void *key, BTreeKeyType keyType)
+{
+	OBTreeKeyBound *bound = (OBTreeKeyBound *) key;
+	OBTreeSerializedKeyBound *result = (OBTreeSerializedKeyBound *) dst;
+	TupleDesc	tupleDesc = o_get_tree_def(desc)->nonLeafTupdesc;
+	int			i;
+	Pointer		ptr,
+				prevPtr;
+
+	Assert(IS_BOUND_KEY_TYPE(keyType));
+
+	result->nkeys = bound->nkeys;
+	ptr = (Pointer) &result->flags[bound->nkeys];
+
+	for (i = 0; i < bound->nkeys; i++)
+	{
+		Form_pg_attribute att = TupleDescAttr(tupleDesc, i);
+		Datum		value;
+		Size		data_length = 0;
+
+		if (!(bound->keys[i].flags & O_VALUE_BOUND_COERCIBLE))
+			return false;
+
+		if (bound->keys[i].flags & O_VALUE_BOUND_NO_VALUE)
+			continue;
+
+		value = bound->keys[i].value;
+		prevPtr = ptr;
+
+		/*
+		 * XXX we use the att_align macros on the pointer value itself, not on
+		 * an offset.  This is a bit of a hack.
+		 */
+		if (att->attbyval)
+		{
+			/* pass-by-value */
+			ptr = (char *) att_align_nominal(ptr, att->attalign);
+			if (ptr > prevPtr)
+				memset(prevPtr, 0, ptr - prevPtr);
+			store_att_byval(ptr, value, att->attlen);
+			data_length = att->attlen;
+		}
+		else if (att->attlen == -1)
+		{
+			/* varlena */
+			Pointer		val = DatumGetPointer(value);
+
+			Assert(!VARATT_IS_EXTERNAL(val));
+
+			if (VARATT_IS_SHORT(val))
+			{
+				/* no alignment for short varlenas */
+				data_length = VARSIZE_SHORT(val);
+				memcpy(ptr, val, data_length);
+			}
+			else
+			{
+				/* full 4-byte header varlena */
+				ptr = (char *) att_align_nominal(ptr,
+												 att->attalign);
+				if (ptr > prevPtr)
+					memset(prevPtr, 0, ptr - prevPtr);
+				data_length = VARSIZE(val);
+				memcpy(ptr, val, data_length);
+			}
+		}
+		else if (att->attlen == -2)
+		{
+			/* cstring ... never needs alignment */
+			Assert(att->attalign == 'c');
+			data_length = strlen(DatumGetCString(value)) + 1;
+			memcpy(ptr, DatumGetPointer(value), data_length);
+		}
+		else
+		{
+			/* fixed-length pass-by-reference */
+			Assert(att->attlen > 0);
+			ptr = (char *) att_align_nominal(ptr, att->attalign);
+			if (ptr > prevPtr)
+				memset(prevPtr, 0, ptr - prevPtr);
+			data_length = att->attlen;
+			memcpy(ptr, DatumGetPointer(value), data_length);
+		}
+		ptr += data_length;
+	}
+
+	return true;
+}
+
+static void *
+o_deserialize_bound(BTreeDescr *desc, Pointer src,
+					BTreeKeyType keyType)
+{
+	static OBTreeKeyBound result;
+	OBTreeSerializedKeyBound *serialized = (OBTreeSerializedKeyBound *) src;
+	Pointer		ptr = (Pointer) &serialized->flags[serialized->nkeys];
+	TupleDesc	tupleDesc = o_get_tree_def(desc)->nonLeafTupdesc;
+	int			i;
+	uint32		offset;
+
+	Assert(IS_BOUND_KEY_TYPE(keyType));
+
+	offset = ptr - src;
+	result.nkeys = serialized->nkeys;
+	for (i = 0; i < result.nkeys; i++)
+	{
+		Form_pg_attribute att = TupleDescAttr(tupleDesc, i);
+
+		result.keys[i].flags = serialized->flags[i];
+		result.keys[i].comparator = NULL;
+		result.keys[i].type = att->atttypid;
+		offset = att_align_pointer(offset, att->attalign, -1, ptr);
+		ptr = src + offset;
+		result.keys[i].value = fetchatt(att, ptr);
+	}
+
+	return &result;
 }
 
 static void

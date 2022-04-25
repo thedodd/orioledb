@@ -302,6 +302,19 @@ typedef struct
 	char		fixedData[O_BTREE_MAX_KEY_SIZE];
 } OFixedKey;
 
+#define		O_BTREE_MAX_SERIALIZED_BOUND_KEY_SIZE (O_BTREE_MAX_KEY_SIZE + INDEX_MAX_KEYS + sizeof(int) + MAXIMUM_ALIGNOF)
+
+typedef struct
+{
+	BTreeKeyType type;
+	uint8		flags;
+	union
+	{
+		char		fixedData[O_BTREE_MAX_SERIALIZED_BOUND_KEY_SIZE];
+		Datum		datum;		/* keep here for alignment */
+	}			data;
+} OSerializedKey;
+
 typedef enum ReadPageResult
 {
 	ReadPageResultOK,
