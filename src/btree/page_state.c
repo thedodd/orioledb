@@ -205,66 +205,6 @@ lock_page_list(OInMemoryBlkno blkno)
 	return oldState;
 }
 
-static uint32
-dequeue_self(OInMemoryBlkno blkno)
-{
-	Page		p = O_GET_IN_MEMORY_PAGE(blkno);
-	OrioleDBPageHeader *header = (OrioleDBPageHeader *) p;
-	proclist_mutable_iter iter;
-	uint32		mask;
-	uint32		state;
-	bool		found = false;
-
-	(void) lock_page_list(blkno);
-
-	proclist_foreach_modify(iter, &O_GET_IN_MEMORY_PAGEDESC(blkno)->waitersList, lwWaitLink)
-	{
-		if (iter.cur == MyProc->pgprocno)
-		{
-			proclist_delete(&O_GET_IN_MEMORY_PAGEDESC(blkno)->waitersList, iter.cur, lwWaitLink);
-			found = true;
-			break;
-		}
-	}
-
-	mask = ~PAGE_STATE_LIST_LOCKED_FLAG;
-	if (proclist_is_empty(&O_GET_IN_MEMORY_PAGEDESC(blkno)->waitersList))
-		mask &= ~PAGE_STATE_HAS_WAITERS_FLAG;
-
-	state = pg_atomic_fetch_and_u32(&header->state, mask);
-	state &= mask;
-
-	if (found)
-	{
-		MyProc->lwWaiting = false;
-	}
-	else
-	{
-		int			extraWaits = 0;
-
-		/*
-		 * Now wait for the scheduled wakeup, otherwise our ->lwWaiting would
-		 * get reset at some inconvenient point later. Most of the time this
-		 * will immediately return.
-		 */
-		for (;;)
-		{
-			PGSemaphoreLock(MyProc->sem);
-			if (!MyProc->lwWaiting)
-				break;
-			extraWaits++;
-		}
-
-		/*
-		 * Fix the process wait semaphore's count for any absorbed wakeups.
-		 */
-		while (extraWaits-- > 0)
-			PGSemaphoreUnlock(MyProc->sem);
-	}
-
-	return state;
-}
-
 /*
  * Place exclusive lock on the page.  Doesn't block readers before
  * page_block_reads() is called.
@@ -297,15 +237,6 @@ lock_page(OInMemoryBlkno blkno)
 		MyProc->lwWaiting = true;
 		MyProc->lwWaitMode = LW_EXCLUSIVE;
 		prevState = pg_atomic_fetch_and_u32(&header->state, ~PAGE_STATE_LIST_LOCKED_FLAG);
-		if (!O_PAGE_STATE_IS_LOCKED(prevState))
-		{
-			prevState = pg_atomic_fetch_or_u32(&header->state, PAGE_STATE_LOCKED_FLAG);
-			if (!O_PAGE_STATE_IS_LOCKED(prevState))
-			{
-				prevState = dequeue_self(blkno);
-				break;
-			}
-		}
 
 		pgstat_report_wait_start(PG_WAIT_LWLOCK | LWTRANCHE_BUFFER_CONTENT);
 
@@ -349,12 +280,6 @@ page_wait_for_read_enable(OInMemoryBlkno blkno)
 		MyProc->lwWaiting = true;
 		MyProc->lwWaitMode = LW_SHARED;
 		prevState = pg_atomic_fetch_and_u32(&header->state, ~PAGE_STATE_LIST_LOCKED_FLAG);
-
-		if (!(prevState & PAGE_STATE_NO_READ_FLAG))
-		{
-			dequeue_self(blkno);
-			return;
-		}
 
 		pgstat_report_wait_start(PG_WAIT_LWLOCK | LWTRANCHE_BUFFER_CONTENT);
 
@@ -405,12 +330,6 @@ page_wait_for_changecount(OInMemoryBlkno blkno, uint32 state)
 		MyProc->lwWaiting = true;
 		MyProc->lwWaitMode = LW_SHARED;
 		curState = pg_atomic_fetch_and_u32(&header->state, ~PAGE_STATE_LIST_LOCKED_FLAG);
-
-		if ((curState & PAGE_STATE_CHANGE_COUNT_MASK) !=
-			(state & PAGE_STATE_CHANGE_COUNT_MASK))
-		{
-			return dequeue_self(blkno);
-		}
 
 		pgstat_report_wait_start(PG_WAIT_LWLOCK | LWTRANCHE_BUFFER_CONTENT);
 
@@ -539,8 +458,6 @@ wakeup_waiters(OInMemoryBlkno blkno)
 
 	proclist_init(&wakeup);
 
-	lock_page_list(blkno);
-
 	proclist_foreach_modify(iter, &O_GET_IN_MEMORY_PAGEDESC(blkno)->waitersList, lwWaitLink)
 	{
 		PGPROC	   *waiter = GetPGProcByNumber(iter.cur);
@@ -589,7 +506,9 @@ void
 unlock_page(OInMemoryBlkno blkno)
 {
 	Page		p = O_GET_IN_MEMORY_PAGE(blkno);
+	OrioleDBPageHeader *header = O_PAGE_HEADER(p);
 	uint32		state;
+	SpinDelayStatus status;
 
 #ifdef CHECK_PAGE_STRUCT
 	if (O_GET_IN_MEMORY_PAGEDESC(blkno)->type != oIndexInvalid)
@@ -620,7 +539,7 @@ unlock_page(OInMemoryBlkno blkno)
 	}
 #endif
 
-	state = my_locked_page_del(blkno);
+	(void) my_locked_page_del(blkno);
 
 #ifdef USE_ASSERT_CHECKING
 	if (!O_PAGE_IS(p, LEAF) && OidIsValid(O_GET_IN_MEMORY_PAGEDESC(blkno)->oids.reloid))
@@ -641,18 +560,30 @@ unlock_page(OInMemoryBlkno blkno)
 
 	VALGRIND_CHECK_MEM_IS_DEFINED(O_GET_IN_MEMORY_PAGE(blkno), ORIOLEDB_BLCKSZ);
 
-	Assert((state & PAGE_STATE_CHANGE_NON_WAITERS_MASK) == (pg_atomic_read_u32(&(O_PAGE_HEADER(p)->state)) & PAGE_STATE_CHANGE_NON_WAITERS_MASK));
+	init_local_spin_delay(&status);
+	state = pg_atomic_read_u32(&header->state);
+	while (true)
+	{
+		uint32		newState;
 
-	if (state & PAGE_STATE_NO_READ_FLAG)
-	{
-		state = pg_atomic_add_fetch_u32(&(O_PAGE_HEADER(p)->state),
-										PAGE_STATE_CHANGE_COUNT_ONE - (state & (PAGE_STATE_LOCKED_FLAG | PAGE_STATE_NO_READ_FLAG)));
+		newState = state & (~(PAGE_STATE_LOCKED_FLAG | PAGE_STATE_NO_READ_FLAG));
+		if (O_PAGE_STATE_READ_IS_BLOCKED(state))
+			newState += PAGE_STATE_CHANGE_COUNT_ONE;
+
+		if (state & PAGE_STATE_LIST_LOCKED_FLAG)
+		{
+			perform_spin_delay(&status);
+			state = pg_atomic_read_u32(&header->state);
+			continue;
+		}
+
+		if (state & PAGE_STATE_HAS_WAITERS_FLAG)
+			newState |= PAGE_STATE_LIST_LOCKED_FLAG;
+
+		if (pg_atomic_compare_exchange_u32(&header->state, &state, newState))
+			break;
 	}
-	else
-	{
-		state = pg_atomic_fetch_and_u32(&(O_PAGE_HEADER(p)->state), ~PAGE_STATE_LOCKED_FLAG);
-		state &= ~PAGE_STATE_LOCKED_FLAG;
-	}
+	finish_spin_delay(&status);
 
 	if (state & PAGE_STATE_HAS_WAITERS_FLAG)
 		wakeup_waiters(blkno);
