@@ -164,7 +164,10 @@ find_page(OBTreeFindPageContext *context, void *key, BTreeKeyType keyType,
 			}
 			else
 			{
-				lock_page(intCxt.blkno);
+				lock_page_with_key(desc,
+								   &intCxt.blkno, &intCxt.pageChangeCount,
+								   key, keyType);
+				p = O_GET_IN_MEMORY_PAGE(intCxt.blkno);
 			}
 			intCxt.pagePtr = p;
 			intCxt.haveLock = true;
