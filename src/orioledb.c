@@ -141,6 +141,7 @@ typedef struct
  */
 static ShmemItem shmemItems[] = {
 	{btree_io_shmem_needs, btree_io_shmem_init},
+	{page_state_shmem_needs, page_state_shmem_init},
 	{oxid_shmem_needs, oxid_init_shmem},
 	{sys_trees_shmem_needs, sys_trees_shmem_init},
 	{StopEventShmemSize, StopEventShmemInit},

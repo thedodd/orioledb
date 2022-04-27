@@ -692,22 +692,22 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 														   insert_item, reserve_kind);
 
 				next = true;
+				END_CRIT_SECTION();
 			}
 			else
 			{
 				/* node and leafs split */
-				unlock_page(blkno);
 				btree_register_inprogress_split(blkno);
-
 				if (insert_item->level == 0)
 					pg_atomic_fetch_add_u32(&BTREE_GET_META(desc)->leafPagesNum, 1);
-
-				curContext->index--;
+				END_CRIT_SECTION();
+	
+				unlock_page_after_split(desc, blkno, right_blkno, split_key);
+	
+					curContext->index--;
 				insert_item->refind = true;
 				next = false;
 			}
-
-			END_CRIT_SECTION();
 
 			if (STOPEVENT_CONDITION(STOPEVENT_SPLIT_FAIL, params))
 				elog(ERROR, "Debug condition: page has been splitted.");

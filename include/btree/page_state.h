@@ -30,14 +30,23 @@
 #define O_PAGE_STATE_BLOCK_READ(state) ((state) | PAGE_STATE_LOCKED_FLAG | PAGE_STATE_NO_READ_FLAG)
 #define O_PAGE_STATE_READ_IS_BLOCKED(state) ((state) & PAGE_STATE_NO_READ_FLAG)
 
+extern Size page_state_shmem_needs(void);
+extern void page_state_shmem_init(Pointer buf, bool found);
 extern bool have_locked_pages(void);
 extern void lock_page(OInMemoryBlkno blkno);
+extern void lock_page_with_key(BTreeDescr *desc,
+							   OInMemoryBlkno *blkno, uint32 *pageChangeCount,
+							   void *key, BTreeKeyType keyType);
 extern void relock_page(OInMemoryBlkno blkno);
 extern bool try_lock_page(OInMemoryBlkno blkno);
 extern void delare_page_as_locked(OInMemoryBlkno blkno);
 extern bool page_is_locked(OInMemoryBlkno blkno);
 extern void page_block_reads(OInMemoryBlkno blkno);
 extern void unlock_page(OInMemoryBlkno blkno);
+extern void unlock_page_after_split(BTreeDescr *desc,
+									OInMemoryBlkno blkno,
+									OInMemoryBlkno rightBlkno,
+									OTuple hikey);
 extern void release_all_page_locks(void);
 extern void page_wait_for_read_enable(OInMemoryBlkno blkno);
 extern void btree_register_inprogress_split(OInMemoryBlkno left_blkno);
