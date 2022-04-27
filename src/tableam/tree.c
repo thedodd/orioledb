@@ -992,6 +992,8 @@ o_serialize_bound(BTreeDescr *desc, Pointer dst,
 		ptr += data_length;
 	}
 
+	Assert(ptr - dst <= O_BTREE_MAX_SERIALIZED_BOUND_KEY_SIZE);
+
 	return true;
 }
 
