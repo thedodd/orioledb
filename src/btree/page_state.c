@@ -307,7 +307,6 @@ lock_page_with_key(BTreeDescr *desc,
 	LockerShmemState *lockerState = &lockerStates[MyProc->pgprocno];
 	bool		keySerialized = false,
 				keySerializationTried = false;
-	OInMemoryBlkno	origBlkno = *blkno;
 
 	Assert(get_my_locked_page_index(*blkno) < 0);
 
@@ -640,9 +639,19 @@ wakeup_waiters_after_split(BTreeDescr *desc,
 			{
 				BTreeKeyType	keyType;
 				void		   *key;
+				bool			goToRight;
 
 				key = deseriealize_key(desc, &lockerState->key, &keyType);
-				if (o_btree_cmp(desc, key, keyType, &hikey, BTreeKeyNonLeafKey) >= 0)
+				if (keyType == BTreeKeyNone)
+					goToRight = false;
+				else if (keyType == BTreeKeyRightmost)
+					goToRight = true;
+				else if (keyType == BTreeKeyPageHiKey)
+					goToRight = (o_btree_cmp(desc, key, BTreeKeyNonLeafKey, &hikey, BTreeKeyNonLeafKey) > 0);
+				else
+					goToRight = (o_btree_cmp(desc, key, keyType, &hikey, BTreeKeyNonLeafKey) >= 0);
+
+				if (goToRight)
 				{
 					proclist_delete(&O_GET_IN_MEMORY_PAGEDESC(blkno)->waitersList, iter.cur, lwWaitLink);
 					proclist_push_tail(&moveToRight, iter.cur, lwWaitLink);
