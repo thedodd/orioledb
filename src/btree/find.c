@@ -59,6 +59,7 @@ init_page_find_context(OBTreeFindPageContext *context, BTreeDescr *desc,
 	context->index = 0;
 	context->flags = flags;
 	context->imgUndoLoc = InvalidUndoLocation;
+	O_TUPLE_SET_NULL(context->insertTuple);
 	O_TUPLE_SET_NULL(context->lokey.tuple);
 }
 
@@ -162,12 +163,16 @@ find_page(OBTreeFindPageContext *context, void *key, BTreeKeyType keyType,
 				if (!try_lock_page(intCxt.blkno))
 					return false;
 			}
+			else if (!O_TUPLE_IS_NULL(context->insertTuple))
+			{
+				lock_page_with_tuple(desc,
+									 &intCxt.blkno, &intCxt.pageChangeCount,
+									 context->insertTuple);
+				p = O_GET_IN_MEMORY_PAGE(intCxt.blkno);
+			}
 			else
 			{
-				lock_page_with_key(desc,
-								   &intCxt.blkno, &intCxt.pageChangeCount,
-								   key, keyType);
-				p = O_GET_IN_MEMORY_PAGE(intCxt.blkno);
+				lock_page(intCxt.blkno);
 			}
 			intCxt.pagePtr = p;
 			intCxt.haveLock = true;
