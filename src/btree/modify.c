@@ -921,6 +921,9 @@ o_btree_normal_modify(BTreeDescr *desc, BTreeOperationType action,
 	init_page_find_context(&pageFindContext, desc, COMMITSEQNO_INPROGRESS,
 						   BTREE_PAGE_FIND_MODIFY | BTREE_PAGE_FIND_FIX_LEAF_SPLIT);
 
+	if (action == BTreeOperationInsert && tupleType == BTreeKeyLeafTuple)
+		pageFindContext.insertTuple = tuple;
+
 	if (hint && OInMemoryBlknoIsValid(hint->blkno))
 		refind_page(&pageFindContext, key, keyType, 0, hint->blkno, hint->pageChangeCount);
 	else

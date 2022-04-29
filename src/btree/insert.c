@@ -363,7 +363,6 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 	OInMemoryBlkno blkno = OInvalidInMemoryBlkno,
 				right_blkno = OInvalidInMemoryBlkno;
 	Pointer		ptr;
-	bool		place_right = false;
 	BTreePageItemLocator loc;
 
 	Assert(insert_item != NULL);
@@ -389,8 +388,6 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 		LocationIndex newItemSize;
 		OBTreeFindPageContext *curContext = insert_item->context;
 		bool		next;
-
-		place_right = false;
 
 		if (insert_item->level > 0)
 			kind = BTreeKeyNonLeafKey;
@@ -621,6 +618,7 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 			BTreeNonLeafTuphdr *internal_header;
 			Jsonb	   *params = NULL;
 			OInMemoryBlkno root_split_left_blkno = OInvalidInMemoryBlkno;
+			BTreeSplitItems items;
 			CommitSeqNo csn;
 			UndoLocation undoLocation;
 			bool		needsUndo = O_PAGE_IS(p, LEAF) && desc->undoType != UndoReserveNone;
@@ -640,8 +638,18 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 			else
 				csn = COMMITSEQNO_INPROGRESS;
 
-			left_count = btree_get_split_left_count(desc, blkno, insert_item->tuple, insert_item->tuplen,
-													offset, insert_item->replace, &split_key, &split_key_len, csn);
+			make_split_items(desc, p, &items, &offset,
+							 insert_item->tupheader,
+							 insert_item->tuple,
+							 insert_item->tuplen,
+							 insert_item->replace,
+							 csn);
+
+			left_count = btree_get_split_left_count(desc, p, offset,
+													insert_item->replace,
+													&items,
+													&split_key, &split_key_len,
+													csn);
 
 			/* Make page-level undo item if needed */
 			if (needsUndo)
@@ -658,12 +666,8 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 				root_split_left_blkno = ppool_get_page(desc->ppool, reserve_kind);
 			right_blkno = ppool_get_page(desc->ppool, reserve_kind);
 
-			perform_page_split(desc, blkno, right_blkno,
+			perform_page_split(desc, blkno, right_blkno, &items,
 							   left_count, split_key, split_key_len,
-							   &offset, &place_right,
-							   insert_item->tupheader,
-							   insert_item->tuple, insert_item->tuplen,
-							   insert_item->replace,
 							   csn, undoLocation);
 
 			unlock_page(right_blkno);

@@ -14,6 +14,7 @@
 #define __BTREE_PAGE_STATE_H__
 
 #include "btree.h"
+#include "page_contents.h"
 
 /* Flags stored in OrioleDBPageHeader.state */
 #define PAGE_STATE_HAS_WAITERS_FLAG	1
@@ -30,13 +31,21 @@
 #define O_PAGE_STATE_BLOCK_READ(state) ((state) | PAGE_STATE_LOCKED_FLAG | PAGE_STATE_NO_READ_FLAG)
 #define O_PAGE_STATE_READ_IS_BLOCKED(state) ((state) & PAGE_STATE_NO_READ_FLAG)
 
+#define BTREE_PAGE_MAX_CHUNK_ITEMS \
+	(ORIOLEDB_BLCKSZ / (MAXIMUM_ALIGNOF + sizeof(LocationIndex)))
+
+#define BTREE_PAGE_MAX_SPLIT_ITEMS (2 * BTREE_PAGE_MAX_CHUNK_ITEMS)
+
 extern Size page_state_shmem_needs(void);
 extern void page_state_shmem_init(Pointer buf, bool found);
 extern bool have_locked_pages(void);
+extern int get_waiters_with_tuples(BTreeDescr *desc,
+								   OInMemoryBlkno blkno,
+								   int result[BTREE_PAGE_MAX_SPLIT_ITEMS]);
 extern void lock_page(OInMemoryBlkno blkno);
-extern void lock_page_with_key(BTreeDescr *desc,
-							   OInMemoryBlkno *blkno, uint32 *pageChangeCount,
-							   void *key, BTreeKeyType keyType);
+extern void lock_page_with_tuple(BTreeDescr *desc,
+								 OInMemoryBlkno *blkno, uint32 *pageChangeCount,
+								 OTuple tuple);
 extern void relock_page(OInMemoryBlkno blkno);
 extern bool try_lock_page(OInMemoryBlkno blkno);
 extern void delare_page_as_locked(OInMemoryBlkno blkno);

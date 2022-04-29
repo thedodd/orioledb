@@ -55,7 +55,12 @@ typedef struct
 	ORelOids		reloids;
 	OInMemoryBlkno	blkno;
 	uint32		pageChangeCount;
-	OSerializedKey	key;
+	uint8		tupleFlags;
+	union
+	{
+		char		fixedData[O_BTREE_MAX_KEY_SIZE];
+		Datum		datum;		/* keep here for alignment */
+	}			tupleData;
 } LockerShmemState;
 
 static MyLockedPage myLockedPages[MAX_PAGES_PER_PROCESS];
@@ -295,9 +300,9 @@ lock_page(OInMemoryBlkno blkno)
  * page_block_reads() is called.
  */
 void
-lock_page_with_key(BTreeDescr *desc,
-				   OInMemoryBlkno *blkno, uint32 *pageChangeCount,
-				   void *key, BTreeKeyType keyType)
+lock_page_with_tuple(BTreeDescr *desc,
+					 OInMemoryBlkno *blkno, uint32 *pageChangeCount,
+					 OTuple tuple)
 {
 	UsageCountMap *ucm;
 	Page		p = O_GET_IN_MEMORY_PAGE(*blkno);
@@ -305,8 +310,7 @@ lock_page_with_key(BTreeDescr *desc,
 	uint32		prevState;
 	int			extraWaits = 0;
 	LockerShmemState *lockerState = &lockerStates[MyProc->pgprocno];
-	bool		keySerialized = false,
-				keySerializationTried = false;
+	bool		keySerialized = false;
 
 	Assert(get_my_locked_page_index(*blkno) < 0);
 
@@ -316,15 +320,17 @@ lock_page_with_key(BTreeDescr *desc,
 		if (!O_PAGE_STATE_IS_LOCKED(prevState))
 			break;
 
-		if (!keySerializationTried &&
-			seriealize_key(desc, &lockerState->key, key, keyType))
+		if (!keySerialized)
 		{
 			lockerState->reloids = desc->oids;
 			lockerState->blkno = *blkno;
 			lockerState->pageChangeCount = *pageChangeCount;
+			lockerState->tupleFlags = tuple.formatFlags;
+			memcpy(lockerState->tupleData.fixedData,
+				   tuple.data,
+				   o_btree_len(desc, tuple, OTupleLength));
 			keySerialized = true;
 		}
-		keySerializationTried = true;
 
 		proclist_push_tail(&O_GET_IN_MEMORY_PAGEDESC(*blkno)->waitersList,
 						   MyProc->pgprocno,
@@ -610,6 +616,59 @@ wakeup_waiters(OInMemoryBlkno blkno)
 	}
 }
 
+int
+get_waiters_with_tuples(BTreeDescr *desc,
+						OInMemoryBlkno blkno,
+						int result[BTREE_PAGE_MAX_SPLIT_ITEMS])
+{
+	Page		p = O_GET_IN_MEMORY_PAGE(blkno);
+	int			count = 0;
+	OTuple		hikey;
+	proclist_mutable_iter iter;
+
+	if (!(pg_atomic_read_u32(&(O_PAGE_HEADER(p)->state)) &
+		  PAGE_STATE_HAS_WAITERS_FLAG))
+		return 0;
+
+	BTREE_PAGE_GET_HIKEY(hikey, p);
+	lock_page_list(blkno);
+
+	proclist_foreach_modify(iter,
+							&O_GET_IN_MEMORY_PAGEDESC(blkno)->waitersList,
+							lwWaitLink)
+	{
+		PGPROC	   *waiter = GetPGProcByNumber(iter.cur);
+		LockerShmemState *lockerState = &lockerStates[iter.cur];
+
+		if (waiter->lwWaitMode == LW_EXCLUSIVE &&
+			lockerState->blkno == blkno &&
+			lockerState->pageChangeCount == O_PAGE_HEADER(p)->pageChangeCount &&
+			ORelOidsIsEqual(desc->oids, lockerState->reloids))
+		{
+			OTuple		tuple;
+
+			tuple.formatFlags = lockerState->tupleFlags;
+			tuple.data = lockerState->tupleData.fixedData;
+
+			if (o_btree_cmp(desc,
+							&tuple, BTreeKeyLeafTuple,
+							&hikey, BTreeKeyNonLeafKey) < 0)
+				result[count++] = iter.cur;
+			if (count >= BTREE_PAGE_MAX_SPLIT_ITEMS)
+			{
+				Assert(count == BTREE_PAGE_MAX_SPLIT_ITEMS);
+				break;
+			}
+		}
+	}
+
+	pg_atomic_fetch_and_u32(&(O_PAGE_HEADER(p)->state),
+							~PAGE_STATE_LIST_LOCKED_FLAG);
+
+	return count;
+}
+
+
 static void
 wakeup_waiters_after_split(BTreeDescr *desc,
 						   OInMemoryBlkno blkno, OInMemoryBlkno rightBlkno,
@@ -637,21 +696,14 @@ wakeup_waiters_after_split(BTreeDescr *desc,
 			if (lockerState->blkno == blkno &&
 				ORelOidsIsEqual(desc->oids, lockerState->reloids))
 			{
-				BTreeKeyType	keyType;
-				void		   *key;
-				bool			goToRight;
+				OTuple			tuple;
 
-				key = deseriealize_key(desc, &lockerState->key, &keyType);
-				if (keyType == BTreeKeyNone)
-					goToRight = false;
-				else if (keyType == BTreeKeyRightmost)
-					goToRight = true;
-				else if (keyType == BTreeKeyPageHiKey)
-					goToRight = (o_btree_cmp(desc, key, BTreeKeyNonLeafKey, &hikey, BTreeKeyNonLeafKey) > 0);
-				else
-					goToRight = (o_btree_cmp(desc, key, keyType, &hikey, BTreeKeyNonLeafKey) >= 0);
+				tuple.formatFlags = lockerState->tupleFlags;
+				tuple.data = lockerState->tupleData.fixedData;
 
-				if (goToRight)
+				if (o_btree_cmp(desc,
+								&tuple, BTreeKeyLeafTuple,
+								&hikey, BTreeKeyNonLeafKey) >= 0)
 				{
 					proclist_delete(&O_GET_IN_MEMORY_PAGEDESC(blkno)->waitersList, iter.cur, lwWaitLink);
 					proclist_push_tail(&moveToRight, iter.cur, lwWaitLink);
