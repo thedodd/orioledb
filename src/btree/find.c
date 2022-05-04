@@ -166,7 +166,9 @@ find_page(OBTreeFindPageContext *context, void *key, BTreeKeyType keyType,
 			else if (!O_TUPLE_IS_NULL(context->insertTuple))
 			{
 				lock_page_with_tuple(desc,
-									 &intCxt.blkno, &intCxt.pageChangeCount,
+									 &intCxt.blkno,
+									 &intCxt.pageChangeCount,
+									 context->insertXactInfo,
 									 context->insertTuple);
 				p = O_GET_IN_MEMORY_PAGE(intCxt.blkno);
 			}

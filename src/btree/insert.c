@@ -17,6 +17,7 @@
 #include "btree/find.h"
 #include "btree/insert.h"
 #include "btree/split.h"
+#include "btree/page_contents.h"
 #include "btree/page_chunks.h"
 #include "btree/undo.h"
 #include "checkpoint/checkpoint.h"
@@ -353,6 +354,79 @@ o_btree_insert_stack_push_split_item(BTreeInsertStackItem *insert_item,
 	return new_item;
 }
 
+typedef struct
+{
+	uint8		tupleFlags;
+	Pointer		data;
+	LocationIndex size;
+	int			index;
+	int			pgprocno;
+	bool		inserted;
+} TupleWaiterInfo;
+
+/*
+ * Gethers information about tuples to be inserted by other processes.
+ * Returns total size to be occupied by new tuples.
+ */
+static int
+get_tuple_waiter_infos(BTreeDescr *desc,
+					   int tupleWaiterProcnums[BTREE_PAGE_MAX_SPLIT_ITEMS],
+					   TupleWaiterInfo tupleWaiterInfos[BTREE_PAGE_MAX_SPLIT_ITEMS],
+					   int tupleWaitersCount)
+{
+	int		i;
+	int		totalSize = MAXALIGN(tupleWaitersCount * sizeof(LocationIndex));
+
+	for (i = 0; i < tupleWaitersCount; i++)
+	{
+		LockerShmemState *lockerState = &lockerStates[tupleWaiterProcnums[i]];
+		TupleWaiterInfo *tupleWaiterInfo = &tupleWaiterInfos[i];
+		OTuple		tuple;
+
+		tuple.formatFlags = lockerState->tupleFlags;
+		tuple.data = &lockerState->tupleData.fixedData[BTreeLeafTuphdrSize];
+
+		tupleWaiterInfo->pgprocno = tupleWaiterProcnums[i];
+		tupleWaiterInfo->tupleFlags = lockerState->tupleFlags;
+		tupleWaiterInfo->data = lockerState->tupleData.fixedData;
+		tupleWaiterInfo->size = BTreeLeafTuphdrSize +
+								MAXALIGN(o_btree_len(desc,
+													 tuple,
+													 OTupleLength));
+		tupleWaiterInfo->index = i;
+		tupleWaiterInfo->inserted = false;
+		totalSize += tupleWaiterInfo->size;
+	}
+
+	return totalSize;
+}
+
+static int
+waiter_info_cmp(const void *a, const void *b, void *arg)
+{
+	TupleWaiterInfo *wa = (TupleWaiterInfo *) a;
+	TupleWaiterInfo *wb = (TupleWaiterInfo *) b;
+	OTuple		ta;
+	OTuple		tb;
+	BTreeDescr *desc = (BTreeDescr *) arg;
+
+	ta.formatFlags = wa->tupleFlags;
+	ta.data = wa->data + BTreeLeafTuphdrSize;
+	tb.formatFlags = wb->tupleFlags;
+	tb.data = wb->data + BTreeLeafTuphdrSize;
+
+	return o_btree_cmp(desc, &ta, BTreeKeyLeafTuple, &tb, BTreeKeyLeafTuple);
+
+}
+
+static BTreeItemPageFitType
+merge_waited_tuples(BTreeDescr *desc, BTreeSplitItems *items,
+					TupleWaiterInfo tupleWaiterInfos[BTREE_PAGE_MAX_SPLIT_ITEMS],
+					int tupleWaitersCount)
+{
+	return BTreeItemPageFitCompactRequired;
+}
+
 static void
 o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 {
@@ -387,6 +461,10 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 		BTreeItemPageFitType fit;
 		LocationIndex newItemSize;
 		OBTreeFindPageContext *curContext = insert_item->context;
+		int		tupleWaiterProcnums[BTREE_PAGE_MAX_SPLIT_ITEMS];
+		TupleWaiterInfo	tupleWaiterInfos[BTREE_PAGE_MAX_SPLIT_ITEMS];
+		int		tupleWaitersCount;
+
 		bool		next;
 
 		if (insert_item->level > 0)
@@ -458,18 +536,41 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 
 		p = O_GET_IN_MEMORY_PAGE(blkno);
 
-		if (insert_item->level > 0)
-		{
-			loc = curContext->items[curContext->index].locator;
-			tupheaderlen = BTreeNonLeafTuphdrSize;
-		}
-		else
-		{
-			loc = curContext->items[curContext->index].locator;
-			tupheaderlen = BTreeLeafTuphdrSize;
-		}
+		loc = curContext->items[curContext->index].locator;
+		tupheaderlen = (insert_item->level > 0) ?
+			BTreeNonLeafTuphdrSize : BTreeLeafTuphdrSize;
 
 		newItemSize = MAXALIGN(insert_item->tuplen) + tupheaderlen;
+
+		tupleWaitersCount = get_waiters_with_tuples(desc, blkno, tupleWaiterProcnums);
+		if (tupleWaitersCount > 0)
+		{
+			BTreeSplitItems items;
+			int		totalSize;
+			CommitSeqNo		csn;
+
+			totalSize = get_tuple_waiter_infos(desc,
+											   tupleWaiterProcnums,
+											   tupleWaiterInfos,
+											   tupleWaitersCount);
+			
+			if (totalSize <= BTREE_PAGE_FREE_SPACE(p))
+				csn = COMMITSEQNO_FROZEN;
+			else
+				csn = pg_atomic_read_u64(&ShmemVariableCache->nextCommitSeqNo);
+
+			qsort_arg(tupleWaiterInfos,
+					  tupleWaitersCount,
+					  sizeof(TupleWaiterInfo),
+					  waiter_info_cmp,
+					  desc);
+			make_split_items_plain(desc, p, &items, csn);
+			fit = merge_waited_tuples(desc, &items,
+									  tupleWaiterInfos,
+									  tupleWaitersCount);
+
+
+		}
 
 		/*
 		 * Pass the current value of nextCommitSeqNo to

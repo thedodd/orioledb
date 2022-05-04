@@ -41,6 +41,7 @@ typedef struct
 	UndoLocation imgUndoLoc;
 	int			index;
 	OBtreePageFindItem items[ORIOLEDB_MAX_DEPTH];
+	OTupleXactInfo insertXactInfo;
 	OTuple		insertTuple;
 
 	/*

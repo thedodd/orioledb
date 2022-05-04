@@ -363,4 +363,21 @@ extern bool page_fits_hikey(Page p, LocationIndex newHikeySize);
 extern void page_resize_hikey(Page p, LocationIndex newHikeySize);
 extern void btree_page_update_max_key_len(BTreeDescr *desc, Page p);
 
+
+/* This should be in page_state.h but depends on O_BTREE_MAX_KEY_SIZE */
+typedef struct
+{
+	ORelOids		reloids;
+	OInMemoryBlkno	blkno;
+	uint32		pageChangeCount;
+	uint8		tupleFlags;
+	union
+	{
+		char		fixedData[BTreeLeafTuphdrSize + O_BTREE_MAX_KEY_SIZE];
+		Datum		datum;		/* keep here for alignment */
+	}			tupleData;
+} LockerShmemState;
+
+extern LockerShmemState *lockerStates;
+
 #endif							/* __BTREE_PAGE_CONTENTS_H__ */
