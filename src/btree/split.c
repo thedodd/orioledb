@@ -116,6 +116,60 @@ make_split_items(BTreeDescr *desc, Page page,
 	items->leaf = O_PAGE_IS(page, LEAF);
 }
 
+void
+make_split_items_plain(BTreeDescr *desc, Page page,
+					   BTreeSplitItems *items, CommitSeqNo csn)
+{
+	BTreePageItemLocator loc;
+	bool		leaf = O_PAGE_IS(page, LEAF);
+	int			i;
+	int			maxKeyLen = MAXALIGN(((BTreePageHeader *) page)->maxKeyLen);
+
+	i = 0;
+	BTREE_PAGE_LOCATOR_FIRST(page, &loc);
+	while (BTREE_PAGE_LOCATOR_IS_VALID(page, &loc))
+	{
+		if (leaf)
+		{
+			BTreeLeafTuphdr *tupHdr;
+			OTuple		tup;
+			bool		finished;
+
+			BTREE_PAGE_READ_LEAF_ITEM(tupHdr, tup, page, &loc);
+
+			finished = COMMITSEQNO_IS_FROZEN(csn) ? false : XACT_INFO_FINISHED_FOR_EVERYBODY(tupHdr->xactInfo);
+			if (finished && tupHdr->deleted &&
+				(COMMITSEQNO_IS_INPROGRESS(csn) || XACT_INFO_MAP_CSN(tupHdr->xactInfo) < csn))
+			{
+				BTREE_PAGE_LOCATOR_NEXT(page, &loc);
+				continue;
+			}
+
+			items->items[i].data = (Pointer) tupHdr;
+			items->items[i].flags = tup.formatFlags;
+			items->items[i].size = finished ?
+				(BTreeLeafTuphdrSize + MAXALIGN(o_btree_len(desc, tup, OTupleLength))) :
+				BTREE_PAGE_GET_ITEM_SIZE(page, &loc);
+			items->items[i].newItem = false;
+		}
+		else
+		{
+			items->items[i].data = BTREE_PAGE_LOCATOR_GET_ITEM(page, &loc);
+			items->items[i].flags = BTREE_PAGE_GET_ITEM_FLAGS(page, &loc);
+			items->items[i].size = BTREE_PAGE_GET_ITEM_SIZE(page, &loc);
+			items->items[i].newItem = false;
+		}
+
+		i++;
+		BTREE_PAGE_LOCATOR_NEXT(page, &loc);
+	}
+	items->itemsCount = i;
+	items->maxKeyLen = maxKeyLen;
+	items->hikeySize = O_PAGE_IS(page, RIGHTMOST) ? 0 : BTREE_PAGE_GET_HIKEY_SIZE(page);
+	items->hikeysEnd = BTREE_PAGE_HIKEYS_END(desc, page);
+	items->leaf = O_PAGE_IS(page, LEAF);
+}
+
 /*
  * Find the location for B-tree page split.  This function take into accouint
  * insertion of new tuple or replacement of existing one.  It tries to keep

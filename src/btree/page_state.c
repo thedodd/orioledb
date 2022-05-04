@@ -50,24 +50,12 @@ typedef struct
 	uint32		state;
 } MyLockedPage;
 
-typedef struct
-{
-	ORelOids		reloids;
-	OInMemoryBlkno	blkno;
-	uint32		pageChangeCount;
-	uint8		tupleFlags;
-	union
-	{
-		char		fixedData[O_BTREE_MAX_KEY_SIZE];
-		Datum		datum;		/* keep here for alignment */
-	}			tupleData;
-} LockerShmemState;
-
 static MyLockedPage myLockedPages[MAX_PAGES_PER_PROCESS];
 static OInMemoryBlkno myInProgressSplitPages[ORIOLEDB_MAX_DEPTH * 2];
 static int	numberOfMyLockedPages = 0;
 static int	numberOfMyInProgressSplitPages = 0;
-static LockerShmemState *lockerStates = NULL;
+
+LockerShmemState *lockerStates = NULL;
 
 #ifdef CHECK_PAGE_STRUCT
 static void o_check_page_struct(BTreeDescr *desc, Page p);
@@ -302,7 +290,7 @@ lock_page(OInMemoryBlkno blkno)
 void
 lock_page_with_tuple(BTreeDescr *desc,
 					 OInMemoryBlkno *blkno, uint32 *pageChangeCount,
-					 OTuple tuple)
+					 OTupleXactInfo xactInfo, OTuple tuple)
 {
 	UsageCountMap *ucm;
 	Page		p = O_GET_IN_MEMORY_PAGE(*blkno);
@@ -322,11 +310,22 @@ lock_page_with_tuple(BTreeDescr *desc,
 
 		if (!keySerialized)
 		{
+			BTreeLeafTuphdr tuphdr;
+
+			tuphdr.deleted = false;
+			tuphdr.undoLocation = InvalidUndoLocation;
+			tuphdr.formatFlags = 0;
+			tuphdr.chainHasLocks = false;
+			tuphdr.xactInfo = xactInfo;
+
 			lockerState->reloids = desc->oids;
 			lockerState->blkno = *blkno;
 			lockerState->pageChangeCount = *pageChangeCount;
 			lockerState->tupleFlags = tuple.formatFlags;
 			memcpy(lockerState->tupleData.fixedData,
+				   &tuphdr,
+				   BTreeLeafTuphdrSize);
+			memcpy(&lockerState->tupleData.fixedData[BTreeLeafTuphdrSize],
 				   tuple.data,
 				   o_btree_len(desc, tuple, OTupleLength));
 			keySerialized = true;
