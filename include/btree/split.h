@@ -32,6 +32,9 @@ extern void make_split_items(BTreeDescr *desc, Page page,
 							 OffsetNumber *offset, Pointer tupleheader,
 							 OTuple tuple, LocationIndex tuplesize,
 							 bool replace, CommitSeqNo csn);
+extern void perform_page_compaction(BTreeDescr *desc, OInMemoryBlkno blkno,
+									BTreeSplitItems *items, bool needsUndo,
+									CommitSeqNo csn);
 extern void perform_page_split(BTreeDescr *desc, OInMemoryBlkno blkno,
 							   OInMemoryBlkno new_blkno,
 							   BTreeSplitItems *items,

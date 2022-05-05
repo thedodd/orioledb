@@ -116,6 +116,69 @@ make_split_items(BTreeDescr *desc, Page page,
 	items->leaf = O_PAGE_IS(page, LEAF);
 }
 
+void
+perform_page_compaction(BTreeDescr *desc, OInMemoryBlkno blkno,
+						BTreeSplitItems *items, bool needsUndo,
+						CommitSeqNo csn)
+{
+	Page		p = O_GET_IN_MEMORY_PAGE(blkno);
+	BTreePageHeader *header = (BTreePageHeader *) p;
+	UndoLocation undoLocation;
+	OFixedKey	hikey;
+	LocationIndex hikeySize;
+
+	START_CRIT_SECTION();
+
+	Assert(O_PAGE_IS(p, LEAF));
+
+	/* Make a page-level undo item if needed */
+	if (needsUndo)
+	{
+		undoLocation = page_add_item_to_undo(desc, p, csn, NULL, 0);
+
+		/*
+		 * Start page modification.  It contains the required memory barrier
+		 * between making undo image and setting the undo location.
+		 */
+		page_block_reads(blkno);
+
+		/* Update the old page meta-data */
+
+		header->undoLocation = undoLocation;
+		header->prevInsertOffset = MaxOffsetNumber;
+
+		/*
+		 * Memory barrier between write undo location and csn.  See comment in
+		 * the o_btree_read_page() for details.
+		 */
+		pg_write_barrier();
+
+		header->csn = csn;
+	}
+	else
+	{
+		page_block_reads(blkno);
+	}
+
+	if (O_PAGE_IS(p, RIGHTMOST))
+	{
+		O_TUPLE_SET_NULL(hikey.tuple);
+		hikeySize = 0;
+	}
+	else
+	{
+		copy_fixed_hikey(desc, &hikey, p);
+		hikeySize = BTREE_PAGE_GET_HIKEY_SIZE(p);
+	}
+
+	btree_page_reorg(desc, p, items->items,
+					 items->itemsCount, hikeySize, hikey.tuple, NULL);
+	Assert(header->dataSize <= ORIOLEDB_BLCKSZ);
+	o_btree_page_calculate_statistics(desc, p);
+
+	END_CRIT_SECTION();
+}
+
 /*
  * Find the location for B-tree page split.  This function take into accouint
  * insertion of new tuple or replacement of existing one.  It tries to keep
