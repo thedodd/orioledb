@@ -81,7 +81,10 @@ page_state_shmem_init(Pointer buf, bool found)
 		int			i;
 
 		for (i = 0; i < max_procs; i++)
+		{
 			lockerStates[i].blkno = OInvalidInMemoryBlkno;
+			lockerStates[i].inserted = false;
+		}
 	}
 }
 
@@ -287,7 +290,7 @@ lock_page(OInMemoryBlkno blkno)
  * Place exclusive lock on the page.  Doesn't block readers before
  * page_block_reads() is called.
  */
-void
+bool
 lock_page_with_tuple(BTreeDescr *desc,
 					 OInMemoryBlkno *blkno, uint32 *pageChangeCount,
 					 OTupleXactInfo xactInfo, OTuple tuple)
@@ -351,6 +354,13 @@ lock_page_with_tuple(BTreeDescr *desc,
 
 		if (keySerialized)
 		{
+			if (lockerState->inserted)
+			{
+				lockerState->blkno = OInvalidInMemoryBlkno;
+				lockerState->inserted = false;
+				return false;
+			}
+
 			*blkno = lockerState->blkno;
 			*pageChangeCount = lockerState->pageChangeCount;
 			p = O_GET_IN_MEMORY_PAGE(*blkno);
@@ -374,6 +384,8 @@ lock_page_with_tuple(BTreeDescr *desc,
 	 */
 	while (extraWaits-- > 0)
 		PGSemaphoreUnlock(MyProc->sem);
+	
+	return true;
 }
 
 void
@@ -629,8 +641,11 @@ get_waiters_with_tuples(BTreeDescr *desc,
 		  PAGE_STATE_HAS_WAITERS_FLAG))
 		return 0;
 
-	BTREE_PAGE_GET_HIKEY(hikey, p);
-	lock_page_list(blkno);
+	if (!O_PAGE_IS(p, RIGHTMOST))
+		BTREE_PAGE_GET_HIKEY(hikey, p);
+	else
+		O_TUPLE_SET_NULL(hikey);
+	(void) lock_page_list(blkno);
 
 	proclist_foreach_modify(iter,
 							&O_GET_IN_MEMORY_PAGEDESC(blkno)->waitersList,
@@ -649,7 +664,8 @@ get_waiters_with_tuples(BTreeDescr *desc,
 			tuple.formatFlags = lockerState->tupleFlags;
 			tuple.data = lockerState->tupleData.fixedData;
 
-			if (o_btree_cmp(desc,
+			if (O_TUPLE_IS_NULL(hikey) ||
+				o_btree_cmp(desc,
 							&tuple, BTreeKeyLeafTuple,
 							&hikey, BTreeKeyNonLeafKey) < 0)
 				result[count++] = iter.cur;
@@ -661,10 +677,43 @@ get_waiters_with_tuples(BTreeDescr *desc,
 		}
 	}
 
-	pg_atomic_fetch_and_u32(&(O_PAGE_HEADER(p)->state),
-							~PAGE_STATE_LIST_LOCKED_FLAG);
+	pg_atomic_fetch_and_u32(&(O_PAGE_HEADER(p)->state), ~PAGE_STATE_LIST_LOCKED_FLAG);
 
 	return count;
+}
+
+void
+wakeup_waiters_with_tuples(OInMemoryBlkno blkno,
+						   int procnums[BTREE_PAGE_MAX_SPLIT_ITEMS],
+						   int count)
+{
+	Page		p = O_GET_IN_MEMORY_PAGE(blkno);
+	int			i;
+	uint32		mask;
+
+	Assert(count > 0);
+
+	(void) lock_page_list(blkno);
+
+	for (i = 0; i < count; i++)
+	{
+		PGPROC	   *waiter = GetPGProcByNumber(procnums[i]);
+		LockerShmemState *lockerState = &lockerStates[waiter->pgprocno];
+
+		proclist_delete(&O_GET_IN_MEMORY_PAGEDESC(blkno)->waitersList,
+						procnums[i], lwWaitLink);
+		lockerState->inserted = true;
+
+		pg_write_barrier();
+		waiter->lwWaiting = false;
+		PGSemaphoreUnlock(waiter->sem);
+	}
+
+	mask = ~PAGE_STATE_LIST_LOCKED_FLAG;
+	if (proclist_is_empty(&O_GET_IN_MEMORY_PAGEDESC(blkno)->waitersList))
+		mask &= ~PAGE_STATE_HAS_WAITERS_FLAG;
+	(void) pg_atomic_fetch_and_u32(&(O_PAGE_HEADER(p)->state), mask);
+
 }
 
 

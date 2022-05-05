@@ -165,11 +165,12 @@ find_page(OBTreeFindPageContext *context, void *key, BTreeKeyType keyType,
 			}
 			else if (!O_TUPLE_IS_NULL(context->insertTuple))
 			{
-				lock_page_with_tuple(desc,
-									 &intCxt.blkno,
-									 &intCxt.pageChangeCount,
-									 context->insertXactInfo,
-									 context->insertTuple);
+				if (!lock_page_with_tuple(desc,
+										  &intCxt.blkno,
+										  &intCxt.pageChangeCount,
+										  context->insertXactInfo,
+										  context->insertTuple))
+					return false;
 				p = O_GET_IN_MEMORY_PAGE(intCxt.blkno);
 			}
 			else
@@ -467,6 +468,7 @@ find_page(OBTreeFindPageContext *context, void *key, BTreeKeyType keyType,
 				}
 			}
 
+			O_TUPLE_SET_NULL(context->insertTuple);
 			return true;
 		}
 		else if (!noneLeafHdr)
@@ -676,7 +678,19 @@ retry:
 	p = O_GET_IN_MEMORY_PAGE(intCxt.blkno);
 	if (BTREE_PAGE_FIND_IS(context, MODIFY))
 	{
-		lock_page(intCxt.blkno);
+		if (!O_TUPLE_IS_NULL(context->insertTuple))
+		{
+			if (!lock_page_with_tuple(desc,
+									  &intCxt.blkno,
+									  &intCxt.pageChangeCount,
+									  context->insertXactInfo,
+									  context->insertTuple))
+				return false;
+		}
+		else
+		{
+			lock_page(intCxt.blkno);
+		}
 		intCxt.haveLock = true;
 		intCxt.pagePtr = p;
 		if (PAGE_GET_LEVEL(p) != level ||

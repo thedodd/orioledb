@@ -83,7 +83,6 @@ stack_page_split(BTreeDescr *desc, OIndexBuildStackItem *stack, int level,
 
 	left_count = btree_page_split_location(desc, &items, 0, 0.9, NULL);
 
-
 	/* Distribute the tuples according the the split location */
 	BTREE_PAGE_OFFSET_GET_LOCATOR(img, left_count, &loc);
 	BTREE_PAGE_LOCATOR_FIRST(new_page, &newLoc);

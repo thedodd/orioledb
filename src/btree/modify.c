@@ -900,6 +900,7 @@ o_btree_normal_modify(BTreeDescr *desc, BTreeOperationType action,
 {
 	OBTreeFindPageContext pageFindContext;
 	Jsonb	   *params = NULL;
+	bool		findResult;
 
 	if (STOPEVENTS_ENABLED())
 		params = prepare_modify_start_params(desc);
@@ -931,9 +932,19 @@ o_btree_normal_modify(BTreeDescr *desc, BTreeOperationType action,
 	}
 
 	if (hint && OInMemoryBlknoIsValid(hint->blkno))
-		refind_page(&pageFindContext, key, keyType, 0, hint->blkno, hint->pageChangeCount);
+		findResult = refind_page(&pageFindContext, key, keyType, 0, hint->blkno, hint->pageChangeCount);
 	else
-		(void) find_page(&pageFindContext, key, keyType, 0);
+		findResult = find_page(&pageFindContext, key, keyType, 0);
+
+	if (!findResult &&
+		action == BTreeOperationInsert && tupleType == BTreeKeyLeafTuple)
+	{
+		if (desc->undoType != UndoReserveNone)
+			release_undo_size(desc->undoType);
+		ppool_release_reserved(desc->ppool, PPOOL_RESERVE_INSERT);
+		return OBTreeModifyResultInserted;
+	}
+	Assert(findResult);
 
 	return o_btree_modify_internal(&pageFindContext, action, tuple, tupleType,
 								   key, keyType, opOxid, opCsn,
