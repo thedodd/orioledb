@@ -32,8 +32,6 @@ extern void make_split_items(BTreeDescr *desc, Page page,
 							 OffsetNumber *offset, Pointer tupleheader,
 							 OTuple tuple, LocationIndex tuplesize,
 							 bool replace, CommitSeqNo csn);
-extern void make_split_items_plain(BTreeDescr *desc, Page page,
-								   BTreeSplitItems *items, CommitSeqNo csn);
 extern void perform_page_split(BTreeDescr *desc, OInMemoryBlkno blkno,
 							   OInMemoryBlkno new_blkno,
 							   BTreeSplitItems *items,
@@ -44,12 +42,11 @@ extern OffsetNumber btree_page_split_location(BTreeDescr *desc,
 											  BTreeSplitItems *items,
 											  OffsetNumber targetLocation,
 											  float4 spaceRatio,
-											  OTuple *split_item,
-											  CommitSeqNo csn);
+											  OTuple *split_item);
 OffsetNumber btree_get_split_left_count(BTreeDescr *desc, Page page,
 										OffsetNumber offset, bool replace,
 										BTreeSplitItems *items,
-										OTuple *split_key, LocationIndex *split_key_len,
-										CommitSeqNo csn);
+										OTuple *split_key,
+										LocationIndex *split_key_len);
 
 #endif							/* __BTREE_SPLIT_H__ */
