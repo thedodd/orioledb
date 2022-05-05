@@ -20,11 +20,11 @@
 typedef struct
 {
 	BTreePageItem items[BTREE_PAGE_MAX_SPLIT_ITEMS];
-	int		itemsCount;
-	int		hikeySize;
-	int		maxKeyLen;
-	int		hikeysEnd;
-	bool	leaf;
+	int			itemsCount;
+	int			hikeySize;
+	int			maxKeyLen;
+	int			hikeysEnd;
+	bool		leaf;
 } BTreeSplitItems;
 
 extern void make_split_items(BTreeDescr *desc, Page page,
