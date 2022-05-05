@@ -81,8 +81,7 @@ stack_page_split(BTreeDescr *desc, OIndexBuildStackItem *stack, int level,
 					 tupleheader, tuple, tuplesize, false,
 					 COMMITSEQNO_INPROGRESS);
 
-	left_count = btree_page_split_location(desc, &items, 0, 0.9, NULL,
-										   COMMITSEQNO_INPROGRESS);
+	left_count = btree_page_split_location(desc, &items, 0, 0.9, NULL);
 
 
 	/* Distribute the tuples according the the split location */

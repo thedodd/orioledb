@@ -356,9 +356,7 @@ o_btree_insert_stack_push_split_item(BTreeInsertStackItem *insert_item,
 
 typedef struct
 {
-	uint8		tupleFlags;
-	Pointer		data;
-	LocationIndex size;
+	BTreePageItem item;
 	int			index;
 	int			pgprocno;
 	bool		inserted;
@@ -375,7 +373,7 @@ get_tuple_waiter_infos(BTreeDescr *desc,
 					   int tupleWaitersCount)
 {
 	int		i;
-	int		totalSize = MAXALIGN(tupleWaitersCount * sizeof(LocationIndex));
+	int		totalSize = 0;
 
 	for (i = 0; i < tupleWaitersCount; i++)
 	{
@@ -386,16 +384,17 @@ get_tuple_waiter_infos(BTreeDescr *desc,
 		tuple.formatFlags = lockerState->tupleFlags;
 		tuple.data = &lockerState->tupleData.fixedData[BTreeLeafTuphdrSize];
 
+		tupleWaiterInfo->item.flags = lockerState->tupleFlags;
+		tupleWaiterInfo->item.data = lockerState->tupleData.fixedData;
+		tupleWaiterInfo->item.size = BTreeLeafTuphdrSize +
+									 MAXALIGN(o_btree_len(desc,
+														  tuple,
+														  OTupleLength));
+		tupleWaiterInfo->item.newItem = false;
 		tupleWaiterInfo->pgprocno = tupleWaiterProcnums[i];
-		tupleWaiterInfo->tupleFlags = lockerState->tupleFlags;
-		tupleWaiterInfo->data = lockerState->tupleData.fixedData;
-		tupleWaiterInfo->size = BTreeLeafTuphdrSize +
-								MAXALIGN(o_btree_len(desc,
-													 tuple,
-													 OTupleLength));
 		tupleWaiterInfo->index = i;
 		tupleWaiterInfo->inserted = false;
-		totalSize += tupleWaiterInfo->size;
+		totalSize += tupleWaiterInfo->item.size;
 	}
 
 	return totalSize;
@@ -410,32 +409,281 @@ waiter_info_cmp(const void *a, const void *b, void *arg)
 	OTuple		tb;
 	BTreeDescr *desc = (BTreeDescr *) arg;
 
-	ta.formatFlags = wa->tupleFlags;
-	ta.data = wa->data + BTreeLeafTuphdrSize;
-	tb.formatFlags = wb->tupleFlags;
-	tb.data = wb->data + BTreeLeafTuphdrSize;
+	ta.formatFlags = wa->item.flags;
+	ta.data = wa->item.data + BTreeLeafTuphdrSize;
+	tb.formatFlags = wb->item.flags;
+	tb.data = wb->item.data + BTreeLeafTuphdrSize;
 
 	return o_btree_cmp(desc, &ta, BTreeKeyLeafTuple, &tb, BTreeKeyLeafTuple);
 
 }
 
-static BTreeItemPageFitType
-merge_waited_tuples(BTreeDescr *desc, BTreeSplitItems *items,
+static bool
+merge_waited_tuples(BTreeDescr *desc, BTreeSplitItems *outputItems,
+					BTreeSplitItems *inputItems,
 					TupleWaiterInfo tupleWaiterInfos[BTREE_PAGE_MAX_SPLIT_ITEMS],
 					int tupleWaitersCount)
 {
-	return BTreeItemPageFitCompactRequired;
+	int		inputIndex,
+			outputIndex = 0,
+			waitersIndex = 0,
+			leftItemsCount = 0,
+			leftItemsSize = 0,
+			leftSpace,
+			rightItemsCount = 0,
+			rightItemsSize = 0,
+			rightSpace;
+	bool	split = false,
+			finished = false;
+
+	leftSpace = ORIOLEDB_BLCKSZ - Max(inputItems->hikeysEnd, MAXALIGN(sizeof(BTreePageHeader)) + inputItems->hikeySize);
+
+	outputItems->leaf = inputItems->leaf;
+	outputItems->hikeySize = inputItems->hikeySize;
+	outputItems->maxKeyLen = inputItems->maxKeyLen;
+	outputItems->hikeysEnd = inputItems->hikeysEnd;
+	outputItems->itemsCount = 0;
+
+	for (inputIndex = 0; inputIndex < inputItems->itemsCount; inputIndex++)
+	{
+		leftItemsSize += inputItems->items[inputIndex].size;
+		leftItemsCount++;
+	}
+
+	inputIndex = 0;
+	while (inputIndex < inputItems->itemsCount ||
+		   waitersIndex < tupleWaitersCount)
+	{
+		int		cmp;
+
+		if (inputIndex >= inputItems->itemsCount)
+		{
+			cmp = 1;
+		}
+		else if (waitersIndex >= tupleWaitersCount || finished)
+		{
+			cmp = -1;
+		}
+		else
+		{
+			OTuple	tup1;
+			OTuple	tup2;
+
+			tup1.formatFlags = inputItems->items[inputIndex].flags;
+			tup1.data = inputItems->items[inputIndex].data + BTreeLeafTuphdrSize;
+			tup2.formatFlags = tupleWaiterInfos[waitersIndex].item.flags;
+			tup2.data = tupleWaiterInfos[waitersIndex].item.data + BTreeLeafTuphdrSize;
+			cmp = o_btree_cmp(desc,
+							  &tup1, BTreeKeyLeafTuple,
+							  &tup2, BTreeKeyLeafTuple);
+			
+			/*
+			 * We don't resolve the conflicts.
+			 */
+			if (cmp == 0)
+			{
+				cmp = -1;
+				waitersIndex++;
+			}
+		}
+
+		Assert(cmp != 0);
+
+		if (cmp > 0)
+		{
+			OTuple	tup;
+			int		newKeyLen;
+
+			tup.formatFlags = tupleWaiterInfos[waitersIndex].item.flags;
+			tup.data = tupleWaiterInfos[waitersIndex].item.data + BTreeLeafTuphdrSize;
+			newKeyLen = MAXALIGN(o_btree_len(desc, tup,
+											 OTupleKeyLengthNoVersion));
+			outputItems->maxKeyLen = Max(outputItems->maxKeyLen, newKeyLen);
+
+			leftItemsCount++;
+			leftItemsSize += tupleWaiterInfos[waitersIndex].item.size;
+
+			if (!split)
+			{
+				if (leftItemsSize +
+					MAXALIGN(leftItemsCount * sizeof(LocationIndex)) >
+					leftSpace)
+				{
+					split = true;
+					rightSpace = ORIOLEDB_BLCKSZ - Max(outputItems->hikeysEnd, MAXALIGN(sizeof(BTreePageHeader)) + outputItems->hikeySize);
+
+				}
+			}
+
+			if (split)
+			{
+				leftSpace = ORIOLEDB_BLCKSZ - Max(outputItems->hikeysEnd, MAXALIGN(sizeof(BTreePageHeader)) + outputItems->maxKeyLen);
+				while (leftItemsSize +
+					   MAXALIGN(leftItemsCount * sizeof(LocationIndex)) >
+					   leftSpace)
+				{
+					int		itemSize;
+
+					leftItemsCount--;
+					rightItemsCount++;
+
+					if (leftItemsCount < outputIndex)
+						itemSize = outputItems->items[leftItemsCount].size;
+					else if (leftItemsCount == outputIndex)
+						itemSize = tupleWaiterInfos[waitersIndex].item.size;
+					else
+						itemSize = inputItems->items[inputIndex + (leftItemsCount - outputIndex - 1)].size;
+
+					leftItemsSize -= itemSize;
+					rightItemsSize -= itemSize;
+				}
+ 
+				Assert(rightItemsCount > 0);
+				if (rightItemsSize +
+					MAXALIGN(rightItemsCount * sizeof(LocationIndex)) <=
+					rightSpace)
+				{
+					cmp = -1;
+					finished = true;
+				}
+			}
+		}
+
+		if (cmp > 0)
+		{
+			tupleWaiterInfos[waitersIndex].inserted = true;
+			outputItems->items[outputIndex++] = tupleWaiterInfos[waitersIndex++].item;
+		}
+		else if (cmp < 0)
+			outputItems->items[outputIndex++] = inputItems->items[inputIndex++];
+	}
+
+	outputItems->itemsCount = outputIndex;
+
+	if (leftItemsSize +
+		MAXALIGN(leftItemsCount * sizeof(LocationIndex)) >
+		leftSpace)
+		split = true;
+
+	return split;
 }
+
+static bool
+o_btree_insert_split(BTreeInsertStackItem *insert_item,
+					 BTreeSplitItems *items,
+					 OffsetNumber offset,
+					 CommitSeqNo csn,
+					 bool needsUndo,
+					 int reserve_kind)
+{
+	OffsetNumber left_count;
+	OBTreeFindPageContext *curContext = insert_item->context;
+	BTreeDescr *desc = curContext->desc;
+	OInMemoryBlkno blkno,
+				right_blkno = OInvalidInMemoryBlkno,
+				root_split_left_blkno = OInvalidInMemoryBlkno;
+	Page		p;
+	OTuple		split_key;
+	LocationIndex split_key_len;
+	UndoLocation undoLocation;
+	BTreeNonLeafTuphdr *internal_header;
+	bool		next;
+	Jsonb	   *params = NULL;
+
+	blkno = curContext->items[curContext->index].blkno;
+	p = O_GET_IN_MEMORY_PAGE(blkno);
+
+	if (STOPEVENTS_ENABLED())
+		params = btree_page_stopevent_params(desc, p);
+
+	left_count = btree_get_split_left_count(desc, p, offset,
+											insert_item->replace,
+											items,
+											&split_key, &split_key_len);
+
+	/* Make page-level undo item if needed */
+	if (needsUndo)
+		undoLocation = page_add_item_to_undo(desc, p, csn,
+											 &split_key, split_key_len);
+	else
+		undoLocation = InvalidUndoLocation;
+
+	internal_header = palloc(sizeof(BTreeNonLeafTuphdr));
+
+	START_CRIT_SECTION();
+
+	if (blkno == desc->rootInfo.rootPageBlkno)
+		root_split_left_blkno = ppool_get_page(desc->ppool, reserve_kind);
+	right_blkno = ppool_get_page(desc->ppool, reserve_kind);
+
+	perform_page_split(desc, blkno, right_blkno, items,
+						left_count, split_key, split_key_len,
+						csn, undoLocation);
+
+	unlock_page(right_blkno);
+
+	if (insert_item->left_blkno != OInvalidInMemoryBlkno)
+	{
+		btree_split_mark_finished(insert_item->left_blkno, true, true);
+		btree_unregister_inprogress_split(insert_item->left_blkno);
+		insert_item->left_blkno = OInvalidInMemoryBlkno;
+	}
+
+	insert_item->left_blkno = blkno;
+
+	o_btree_split_fill_downlink_item_with_key(insert_item, blkno, false,
+												split_key, split_key_len,
+												internal_header);
+
+	if (blkno == desc->rootInfo.rootPageBlkno)
+	{
+		Assert(curContext->index == 0);
+
+		blkno = o_btree_finish_root_split_internal(desc,
+													root_split_left_blkno,
+													insert_item, reserve_kind);
+
+		next = true;
+		END_CRIT_SECTION();
+	}
+	else
+	{
+		/* node and leafs split */
+		btree_register_inprogress_split(blkno);
+		if (insert_item->level == 0)
+			pg_atomic_fetch_add_u32(&BTREE_GET_META(desc)->leafPagesNum, 1);
+		END_CRIT_SECTION();
+
+		unlock_page_after_split(desc, blkno, right_blkno, split_key);
+
+		curContext->index--;
+		insert_item->refind = true;
+		next = false;
+	}
+
+	if (STOPEVENT_CONDITION(STOPEVENT_SPLIT_FAIL, params))
+		elog(ERROR, "Debug condition: page has been splitted.");
+
+	STOPEVENT(STOPEVENT_PAGE_SPLIT, params);
+
+	if (!next)
+	{
+		/* Split non-rootPageBlkno case. Insert a downlink. */
+		insert_item->replace = false;
+		insert_item->level++;
+	}
+
+	return next;
+}
+
 
 static void
 o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 {
-	LocationIndex tupheaderlen;
 	BTreeKeyType kind;
 	BTreeDescr *desc = insert_item->context->desc;
 	Page		p;
-	OInMemoryBlkno blkno = OInvalidInMemoryBlkno,
-				right_blkno = OInvalidInMemoryBlkno;
+	OInMemoryBlkno blkno = OInvalidInMemoryBlkno;
 	Pointer		ptr;
 	BTreePageItemLocator loc;
 
@@ -460,6 +708,7 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 	{
 		BTreeItemPageFitType fit;
 		LocationIndex newItemSize;
+		LocationIndex tupheaderlen;
 		OBTreeFindPageContext *curContext = insert_item->context;
 		int		tupleWaiterProcnums[BTREE_PAGE_MAX_SPLIT_ITEMS];
 		TupleWaiterInfo	tupleWaiterInfos[BTREE_PAGE_MAX_SPLIT_ITEMS];
@@ -541,51 +790,6 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 		tupheaderlen = (insert_item->level > 0) ?
 			BTreeNonLeafTuphdrSize : BTreeLeafTuphdrSize;
 
-		newItemSize = MAXALIGN(insert_item->tuplen) + tupheaderlen;
-
-		tupleWaitersCount = get_waiters_with_tuples(desc, blkno, tupleWaiterProcnums);
-		if (tupleWaitersCount > 0)
-		{
-			BTreeSplitItems items;
-			int		totalSize;
-			CommitSeqNo		csn;
-
-			totalSize = get_tuple_waiter_infos(desc,
-											   tupleWaiterProcnums,
-											   tupleWaiterInfos,
-											   tupleWaitersCount);
-			
-			if (totalSize <= BTREE_PAGE_FREE_SPACE(p))
-				csn = COMMITSEQNO_FROZEN;
-			else
-				csn = pg_atomic_read_u64(&ShmemVariableCache->nextCommitSeqNo);
-
-			qsort_arg(tupleWaiterInfos,
-					  tupleWaitersCount,
-					  sizeof(TupleWaiterInfo),
-					  waiter_info_cmp,
-					  desc);
-			make_split_items_plain(desc, p, &items, csn);
-			fit = merge_waited_tuples(desc, &items,
-									  tupleWaiterInfos,
-									  tupleWaitersCount);
-
-
-		}
-
-		/*
-		 * Pass the current value of nextCommitSeqNo to
-		 * page_locator_fits_item().  The result coult be somewhat
-		 * pessimistic: it might happend that we could actually compact more
-		 * due to advance of nextCommitSeqNo.
-		 */
-		fit = page_locator_fits_item(desc,
-									 p,
-									 &loc,
-									 newItemSize,
-									 insert_item->replace,
-									 pg_atomic_read_u64(&ShmemVariableCache->nextCommitSeqNo));
-
 		if (insert_item->level > 0 && page_is_under_checkpoint(desc, blkno))
 		{
 			/*
@@ -593,6 +797,88 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 			 * autonomous.
 			 */
 			backend_set_autonomous_level(checkpoint_state, insert_item->level);
+		}
+
+		newItemSize = MAXALIGN(insert_item->tuplen) + tupheaderlen;
+
+#ifdef NOT_USED
+		tupleWaitersCount = get_waiters_with_tuples(desc, blkno, tupleWaiterProcnums);
+		if (tupleWaitersCount > 0)
+		{
+			BTreeSplitItems items;
+			BTreeSplitItems newItems;
+			int				insertSize,
+							insertCount;
+			CommitSeqNo		csn;
+			bool			needsUndo = O_PAGE_IS(p, LEAF) && desc->undoType != UndoReserveNone;
+			OffsetNumber	offset;
+			bool			split;
+
+			insertSize = get_tuple_waiter_infos(desc,
+												tupleWaiterProcnums,
+												tupleWaiterInfos,
+												tupleWaitersCount);
+			insertCount = tupleWaitersCount;
+
+			if (!insert_item->replace)
+			{
+				insertCount++;
+				insertSize += tupheaderlen + MAXALIGN(insert_item->tuplen);
+			}
+			else
+			{
+				int		prevItemLen = BTREE_PAGE_GET_ITEM_SIZE(p, &loc);
+				if (prevItemLen < tupheaderlen + MAXALIGN(insert_item->tuplen))
+					insertSize += tupheaderlen + MAXALIGN(insert_item->tuplen) - prevItemLen;
+			}
+
+			if (needsUndo && OXidIsValid(desc->createOxid) &&
+				desc->createOxid == get_current_oxid_if_any())
+				needsUndo = false;
+
+			offset = BTREE_PAGE_LOCATOR_GET_OFFSET(p, &loc);
+
+			/* Get CSN for undo item if needed */
+			if (insertSize + MAXALIGN(insertCount * sizeof(LocationIndex)) <=
+				BTREE_PAGE_FREE_SPACE(p))
+				csn = COMMITSEQNO_FROZEN;
+			else if (needsUndo)
+				csn = pg_atomic_read_u64(&ShmemVariableCache->nextCommitSeqNo);
+			else
+				csn = COMMITSEQNO_INPROGRESS;
+
+			make_split_items(desc, p, &items, &offset,
+							 insert_item->tupheader,
+							 insert_item->tuple,
+							 insert_item->tuplen,
+							 insert_item->replace,
+							 csn);
+
+			qsort_arg(tupleWaiterInfos,
+					  tupleWaitersCount,
+					  sizeof(TupleWaiterInfo),
+					  waiter_info_cmp,
+					  desc);
+
+			split = merge_waited_tuples(desc, &newItems, &items,
+										tupleWaiterInfos,
+									 	tupleWaitersCount);
+		}
+		else
+#endif
+		{
+			/*
+			 * Pass the current value of nextCommitSeqNo to
+			* page_locator_fits_item().  The result coult be somewhat
+			* pessimistic: it might happend that we could actually compact more
+			* due to advance of nextCommitSeqNo.
+			*/
+			fit = page_locator_fits_item(desc,
+										p,
+										&loc,
+										newItemSize,
+										insert_item->replace,
+										pg_atomic_read_u64(&ShmemVariableCache->nextCommitSeqNo));
 		}
 
 		if (fit != BTreeItemPageFitSplitRequired)
@@ -713,24 +999,14 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 			 * No way to fit into the current page.  We have to split the
 			 * page.
 			 */
-			OffsetNumber left_count,
-						offset;
-			OTuple		split_key;
-			LocationIndex split_key_len;
-			BTreeNonLeafTuphdr *internal_header;
-			Jsonb	   *params = NULL;
-			OInMemoryBlkno root_split_left_blkno = OInvalidInMemoryBlkno;
+			OffsetNumber offset;
 			BTreeSplitItems items;
 			CommitSeqNo csn;
-			UndoLocation undoLocation;
 			bool		needsUndo = O_PAGE_IS(p, LEAF) && desc->undoType != UndoReserveNone;
 
 			if (needsUndo && OXidIsValid(desc->createOxid) &&
 				desc->createOxid == get_current_oxid_if_any())
 				needsUndo = false;
-
-			if (STOPEVENTS_ENABLED())
-				params = btree_page_stopevent_params(desc, p);
 
 			offset = BTREE_PAGE_LOCATOR_GET_OFFSET(p, &loc);
 
@@ -746,86 +1022,9 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 							 insert_item->tuplen,
 							 insert_item->replace,
 							 csn);
-
-			left_count = btree_get_split_left_count(desc, p, offset,
-													insert_item->replace,
-													&items,
-													&split_key, &split_key_len,
-													csn);
-
-			/* Make page-level undo item if needed */
-			if (needsUndo)
-				undoLocation = page_add_item_to_undo(desc, p, csn,
-													 &split_key, split_key_len);
-			else
-				undoLocation = InvalidUndoLocation;
-
-			internal_header = palloc(sizeof(BTreeNonLeafTuphdr));
-
-			START_CRIT_SECTION();
-
-			if (blkno == desc->rootInfo.rootPageBlkno)
-				root_split_left_blkno = ppool_get_page(desc->ppool, reserve_kind);
-			right_blkno = ppool_get_page(desc->ppool, reserve_kind);
-
-			perform_page_split(desc, blkno, right_blkno, &items,
-							   left_count, split_key, split_key_len,
-							   csn, undoLocation);
-
-			unlock_page(right_blkno);
-
-			if (insert_item->left_blkno != OInvalidInMemoryBlkno)
-			{
-				btree_split_mark_finished(insert_item->left_blkno, true, true);
-				btree_unregister_inprogress_split(insert_item->left_blkno);
-				insert_item->left_blkno = OInvalidInMemoryBlkno;
-			}
-
-			insert_item->left_blkno = blkno;
-
-			tupheaderlen = BTreeNonLeafTuphdrSize;
-
-			o_btree_split_fill_downlink_item_with_key(insert_item, blkno, false,
-													  split_key, split_key_len,
-													  internal_header);
-
-			if (blkno == desc->rootInfo.rootPageBlkno)
-			{
-				Assert(curContext->index == 0);
-
-				blkno = o_btree_finish_root_split_internal(desc,
-														   root_split_left_blkno,
-														   insert_item, reserve_kind);
-
-				next = true;
-				END_CRIT_SECTION();
-			}
-			else
-			{
-				/* node and leafs split */
-				btree_register_inprogress_split(blkno);
-				if (insert_item->level == 0)
-					pg_atomic_fetch_add_u32(&BTREE_GET_META(desc)->leafPagesNum, 1);
-				END_CRIT_SECTION();
-	
-				unlock_page_after_split(desc, blkno, right_blkno, split_key);
-	
-					curContext->index--;
-				insert_item->refind = true;
-				next = false;
-			}
-
-			if (STOPEVENT_CONDITION(STOPEVENT_SPLIT_FAIL, params))
-				elog(ERROR, "Debug condition: page has been splitted.");
-
-			STOPEVENT(STOPEVENT_PAGE_SPLIT, params);
-
-			if (!next)
-			{
-				/* Split non-rootPageBlkno case. Insert a downlink. */
-				insert_item->replace = false;
-				insert_item->level++;
-			}
+			
+			next = o_btree_insert_split(insert_item, &items, offset, csn,
+										needsUndo, reserve_kind);
 		}
 
 		if (next)
