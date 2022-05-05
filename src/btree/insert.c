@@ -568,6 +568,17 @@ merge_waited_tuples(BTreeDescr *desc, BTreeSplitItems *outputItems,
 	return split;
 }
 
+static void
+o_btree_insert_mark_split_finished_if_needed(BTreeInsertStackItem *insert_item)
+{
+	if (insert_item->left_blkno != OInvalidInMemoryBlkno)
+	{
+		btree_split_mark_finished(insert_item->left_blkno, true, true);
+		btree_unregister_inprogress_split(insert_item->left_blkno);
+		insert_item->left_blkno = OInvalidInMemoryBlkno;
+	}
+}
+
 static bool
 o_btree_insert_split(BTreeInsertStackItem *insert_item,
 					 BTreeSplitItems *items,
@@ -622,13 +633,7 @@ o_btree_insert_split(BTreeInsertStackItem *insert_item,
 
 	unlock_page(right_blkno);
 
-	if (insert_item->left_blkno != OInvalidInMemoryBlkno)
-	{
-		btree_split_mark_finished(insert_item->left_blkno, true, true);
-		btree_unregister_inprogress_split(insert_item->left_blkno);
-		insert_item->left_blkno = OInvalidInMemoryBlkno;
-	}
-
+	o_btree_insert_mark_split_finished_if_needed(insert_item);
 	insert_item->left_blkno = blkno;
 
 	o_btree_split_fill_downlink_item_with_key(insert_item, blkno, false,
@@ -810,8 +815,6 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 		}
 
 		newItemSize = MAXALIGN(insert_item->tuplen) + tupheaderlen;
-
-#ifdef NOT_USED
 		tupleWaitersCount = get_waiters_with_tuples(desc, blkno, tupleWaiterProcnums);
 		if (tupleWaitersCount > 0)
 		{
@@ -820,6 +823,7 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 			int			insertSize,
 						insertCount;
 			CommitSeqNo csn;
+			bool		needsCompaction;
 			bool		needsUndo;
 			OffsetNumber offset;
 			bool		split;
@@ -845,11 +849,11 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 
 			offset = BTREE_PAGE_LOCATOR_GET_OFFSET(p, &loc);
 
-			needsUndo = o_btree_insert_needs_page_undo(descr, p);
+			needsCompaction = (insertSize + MAXALIGN(insertCount * sizeof(LocationIndex)) > BTREE_PAGE_FREE_SPACE(p));
+			needsUndo = needsCompaction && o_btree_insert_needs_page_undo(desc, p);
 
 			/* Get CSN for undo item if needed */
-			if (insertSize + MAXALIGN(insertCount * sizeof(LocationIndex)) <=
-				BTREE_PAGE_FREE_SPACE(p))
+			if (!needsCompaction)
 				csn = COMMITSEQNO_FROZEN;
 			else if (needsUndo)
 				csn = pg_atomic_read_u64(&ShmemVariableCache->nextCommitSeqNo);
@@ -872,9 +876,24 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 			split = merge_waited_tuples(desc, &newItems, &items,
 										tupleWaiterInfos,
 										tupleWaitersCount);
+			
+			if (!split)
+			{
+				START_CRIT_SECTION();
+				perform_page_compaction(desc, blkno, &items, needsUndo, csn);
+				o_btree_insert_mark_split_finished_if_needed(insert_item);
+				MARK_DIRTY(desc->ppool, blkno);
+				unlock_page(blkno);
+				END_CRIT_SECTION();
+				next = true;
+			}
+			else
+			{
+				next = o_btree_insert_split(insert_item, &items, offset, csn,
+											needsUndo, reserve_kind);
+			}
 		}
 		else
-#endif
 		{
 			/*
 			 * Pass the current value of nextCommitSeqNo to
@@ -890,7 +909,11 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 										 pg_atomic_read_u64(&ShmemVariableCache->nextCommitSeqNo));
 		}
 
-		if (fit != BTreeItemPageFitSplitRequired)
+		if (tupleWaitersCount > 0)
+		{
+
+		}
+		else if (fit != BTreeItemPageFitSplitRequired)
 		{
 			BTreePageHeader *header = (BTreePageHeader *) p;
 			BTreeLeafTuphdr prev = {0, 0};
@@ -1005,12 +1028,7 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 				BTREE_PAGE_SET_ITEM_FLAGS(p, &loc, insert_item->tuple.formatFlags);
 			}
 
-			if (insert_item->left_blkno != OInvalidInMemoryBlkno)
-			{
-				btree_split_mark_finished(insert_item->left_blkno, true, true);
-				btree_unregister_inprogress_split(insert_item->left_blkno);
-				insert_item->left_blkno = OInvalidInMemoryBlkno;
-			}
+			o_btree_insert_mark_split_finished_if_needed(insert_item);
 
 			if (fit != BTreeItemPageFitCompactRequired)
 				page_split_chunk_if_needed(desc, p, &loc);
