@@ -821,7 +821,9 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 			BTreeSplitItems items;
 			BTreeSplitItems newItems;
 			int			insertSize,
-						insertCount;
+						insertCount,
+						i,
+						waitersWakeupCount = 0;
 			CommitSeqNo csn;
 			bool		needsCompaction;
 			bool		needsUndo;
@@ -876,7 +878,17 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 			split = merge_waited_tuples(desc, &newItems, &items,
 										tupleWaiterInfos,
 										tupleWaitersCount);
-			
+
+			for (i = 0; i < tupleWaitersCount; i++)
+			{
+				if (tupleWaiterInfos[i].inserted)
+					tupleWaiterProcnums[waitersWakeupCount++] = tupleWaiterInfos[i].pgprocno;
+			}
+			if (waitersWakeupCount > 0)
+				wakeup_waiters_with_tuples(blkno,
+										   tupleWaiterProcnums,
+										   waitersWakeupCount);
+
 			if (!split)
 			{
 				START_CRIT_SECTION();

@@ -371,6 +371,7 @@ typedef struct
 	OInMemoryBlkno blkno;
 	uint32		pageChangeCount;
 	uint8		tupleFlags;
+	bool		inserted;
 	union
 	{
 		char		fixedData[BTreeLeafTuphdrSize + O_BTREE_MAX_KEY_SIZE];
