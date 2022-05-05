@@ -39,9 +39,9 @@
 extern Size page_state_shmem_needs(void);
 extern void page_state_shmem_init(Pointer buf, bool found);
 extern bool have_locked_pages(void);
-extern int get_waiters_with_tuples(BTreeDescr *desc,
-								   OInMemoryBlkno blkno,
-								   int result[BTREE_PAGE_MAX_SPLIT_ITEMS]);
+extern int	get_waiters_with_tuples(BTreeDescr *desc,
+									OInMemoryBlkno blkno,
+									int result[BTREE_PAGE_MAX_SPLIT_ITEMS]);
 extern void lock_page(OInMemoryBlkno blkno);
 extern void lock_page_with_tuple(BTreeDescr *desc,
 								 OInMemoryBlkno *blkno, uint32 *pageChangeCount,

@@ -367,8 +367,8 @@ extern void btree_page_update_max_key_len(BTreeDescr *desc, Page p);
 /* This should be in page_state.h but depends on O_BTREE_MAX_KEY_SIZE */
 typedef struct
 {
-	ORelOids		reloids;
-	OInMemoryBlkno	blkno;
+	ORelOids	reloids;
+	OInMemoryBlkno blkno;
 	uint32		pageChangeCount;
 	uint8		tupleFlags;
 	union

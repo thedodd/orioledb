@@ -78,7 +78,7 @@ page_state_shmem_init(Pointer buf, bool found)
 	lockerStates = (LockerShmemState *) ptr;
 	if (!found)
 	{
-		int		i;
+		int			i;
 
 		for (i = 0; i < max_procs; i++)
 			lockerStates[i].blkno = OInvalidInMemoryBlkno;
@@ -695,7 +695,7 @@ wakeup_waiters_after_split(BTreeDescr *desc,
 			if (lockerState->blkno == blkno &&
 				ORelOidsIsEqual(desc->oids, lockerState->reloids))
 			{
-				OTuple			tuple;
+				OTuple		tuple;
 
 				tuple.formatFlags = lockerState->tupleFlags;
 				tuple.data = lockerState->tupleData.fixedData;
@@ -794,7 +794,7 @@ wakeup_waiters_after_split(BTreeDescr *desc,
 /*
  * Basic logic of page unlocking.  Performs required checks and manipulations
  * with page state.
- * 
+ *
  * If page has waiters leaves state with list lock for further waiters wakeup.
  */
 static uint32
@@ -889,7 +889,7 @@ unlock_page_internal(OInMemoryBlkno blkno)
 void
 unlock_page(OInMemoryBlkno blkno)
 {
-	uint32	state = unlock_page_internal(blkno);
+	uint32		state = unlock_page_internal(blkno);
 
 	if (state & PAGE_STATE_HAS_WAITERS_FLAG)
 		wakeup_waiters(blkno);
@@ -903,7 +903,7 @@ unlock_page_after_split(BTreeDescr *desc,
 						OInMemoryBlkno blkno, OInMemoryBlkno rightBlkno,
 						OTuple hikey)
 {
-	uint32	state = unlock_page_internal(blkno);
+	uint32		state = unlock_page_internal(blkno);
 
 	if (state & PAGE_STATE_HAS_WAITERS_FLAG)
 		wakeup_waiters_after_split(desc, blkno, rightBlkno, hikey);

@@ -37,7 +37,7 @@ make_split_items(BTreeDescr *desc, Page page,
 	bool		leaf = O_PAGE_IS(page, LEAF);
 	LocationIndex tuple_header_size = leaf ? BTreeLeafTuphdrSize : BTreeNonLeafTuphdrSize;
 	int			i;
-	static char	newItem[Max(BTreeLeafTuphdrSize, BTreeNonLeafTuphdrSize) + O_BTREE_MAX_TUPLE_SIZE];
+	static char newItem[Max(BTreeLeafTuphdrSize, BTreeNonLeafTuphdrSize) + O_BTREE_MAX_TUPLE_SIZE];
 	int			maxKeyLen = MAXALIGN(((BTreePageHeader *) page)->maxKeyLen);
 
 	i = 0;
@@ -46,7 +46,7 @@ make_split_items(BTreeDescr *desc, Page page,
 	{
 		if (i == *offset)
 		{
-			int		newKeyLen;
+			int			newKeyLen;
 
 			memcpy(newItem, tupleheader, tuple_header_size);
 			memcpy(&newItem[tuple_header_size], tuple.data, tuplesize);
