@@ -386,7 +386,7 @@ lock_page_with_tuple(BTreeDescr *desc,
 	 */
 	while (extraWaits-- > 0)
 		PGSemaphoreUnlock(MyProc->sem);
-	
+
 	return true;
 }
 

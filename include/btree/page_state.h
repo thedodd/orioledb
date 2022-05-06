@@ -44,7 +44,7 @@ extern int	get_waiters_with_tuples(BTreeDescr *desc,
 									int result[BTREE_PAGE_MAX_SPLIT_ITEMS]);
 extern void wakeup_waiters_with_tuples(OInMemoryBlkno blkno,
 									   int procnums[BTREE_PAGE_MAX_SPLIT_ITEMS],
-									    int count);
+									   int count);
 extern void lock_page(OInMemoryBlkno blkno);
 extern bool lock_page_with_tuple(BTreeDescr *desc,
 								 OInMemoryBlkno *blkno, uint32 *pageChangeCount,
