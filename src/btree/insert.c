@@ -586,7 +586,9 @@ o_btree_insert_split(BTreeInsertStackItem *insert_item,
 					 OffsetNumber offset,
 					 CommitSeqNo csn,
 					 bool needsUndo,
-					 int reserve_kind)
+					 int reserve_kind,
+					 int *waitersWakeupProcnums,
+					 int waitersWakeupCount)
 {
 	OffsetNumber left_count;
 	OBTreeFindPageContext *curContext = insert_item->context;
@@ -633,6 +635,11 @@ o_btree_insert_split(BTreeInsertStackItem *insert_item,
 					   csn, undoLocation);
 
 	unlock_page(right_blkno);
+
+	if (waitersWakeupCount > 0)
+		wakeup_waiters_with_tuples(blkno,
+									waitersWakeupProcnums,
+									waitersWakeupCount);
 
 	o_btree_insert_mark_split_finished_if_needed(insert_item);
 	insert_item->left_blkno = blkno;
@@ -898,10 +905,8 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 											lockerState);
 				}
 			}
-			if (waitersWakeupCount > 0)
-				wakeup_waiters_with_tuples(blkno,
-										   tupleWaiterProcnums,
-										   waitersWakeupCount);
+
+			Assert(items.itemsCount + waitersWakeupCount == newItems.itemsCount);
 
 			if (!split)
 			{
@@ -909,6 +914,12 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 				perform_page_compaction(desc, blkno, &newItems, needsUndo, csn);
 				o_btree_insert_mark_split_finished_if_needed(insert_item);
 				MARK_DIRTY(desc->ppool, blkno);
+
+				if (waitersWakeupCount > 0)
+					wakeup_waiters_with_tuples(blkno,
+											   tupleWaiterProcnums,
+											   waitersWakeupCount);
+
 				unlock_page(blkno);
 				END_CRIT_SECTION();
 				next = true;
@@ -916,7 +927,9 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 			else
 			{
 				next = o_btree_insert_split(insert_item, &newItems, offset, csn,
-											needsUndo, reserve_kind);
+											needsUndo, reserve_kind,
+											tupleWaiterProcnums,
+											waitersWakeupCount);
 			}
 		}
 		else
@@ -1093,7 +1106,7 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 							 csn);
 
 			next = o_btree_insert_split(insert_item, &items, offset, csn,
-										needsUndo, reserve_kind);
+										needsUndo, reserve_kind, NULL, 0);
 		}
 
 		if (next)
