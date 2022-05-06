@@ -370,8 +370,10 @@ typedef struct
 	ORelOids	reloids;
 	OInMemoryBlkno blkno;
 	uint32		pageChangeCount;
+	LocalTransactionId localXid;
 	uint8		tupleFlags;
 	bool		inserted;
+	Size		reservedUndoSize;
 	union
 	{
 		char		fixedData[BTreeLeafTuphdrSize + O_BTREE_MAX_KEY_SIZE];

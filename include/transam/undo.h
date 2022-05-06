@@ -170,6 +170,8 @@ extern void write_undo(UndoLocation targetUndoLocation,
 extern bool reserve_undo_size_extended(UndoReserveType type, Size size,
 									   bool waitForUndoLocation,
 									   bool reportError);
+extern void steal_reserved_undo_size(UndoReserveType type, Size size);
+extern void giveup_reserved_undo_size(UndoReserveType type);
 extern void fsync_undo_range(UndoLocation fromLoc, UndoLocation toLoc, uint32 wait_event_info);
 extern Pointer get_undo_record(UndoReserveType type, UndoLocation *undoLocation,
 							   Size size);
@@ -179,6 +181,9 @@ extern Pointer get_undo_record_unreserved(UndoReserveType type,
 extern Size get_reserved_undo_size(UndoReserveType type);
 extern void release_undo_size(UndoReserveType type);
 extern void add_new_undo_stack_item(UndoLocation location);
+extern void add_new_undo_stack_item_to_process(UndoLocation location,
+											   int pgprocno,
+											   LocalTransactionId localXid);
 extern UndoLocation get_subxact_undo_location(void);
 extern void read_shared_undo_locations(UndoStackLocations *to, UndoStackSharedLocations *from);
 extern void write_shared_undo_locations(UndoStackSharedLocations *to, UndoStackLocations *from);
