@@ -815,7 +815,12 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 		}
 
 		newItemSize = MAXALIGN(insert_item->tuplen) + tupheaderlen;
-		tupleWaitersCount = get_waiters_with_tuples(desc, blkno, tupleWaiterProcnums);
+
+		if (insert_item->level == 0)
+			tupleWaitersCount = get_waiters_with_tuples(desc, blkno, tupleWaiterProcnums);
+		else
+			tupleWaitersCount = 0;
+
 		if (tupleWaitersCount > 0)
 		{
 			BTreeSplitItems items;

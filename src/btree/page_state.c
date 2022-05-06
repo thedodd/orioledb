@@ -662,7 +662,7 @@ get_waiters_with_tuples(BTreeDescr *desc,
 			OTuple		tuple;
 
 			tuple.formatFlags = lockerState->tupleFlags;
-			tuple.data = lockerState->tupleData.fixedData;
+			tuple.data = &lockerState->tupleData.fixedData[BTreeLeafTuphdrSize];
 
 			if (O_TUPLE_IS_NULL(hikey) ||
 				o_btree_cmp(desc,
@@ -747,7 +747,7 @@ wakeup_waiters_after_split(BTreeDescr *desc,
 				OTuple		tuple;
 
 				tuple.formatFlags = lockerState->tupleFlags;
-				tuple.data = lockerState->tupleData.fixedData;
+				tuple.data = &lockerState->tupleData.fixedData[BTreeLeafTuphdrSize];
 
 				if (o_btree_cmp(desc,
 								&tuple, BTreeKeyLeafTuple,
