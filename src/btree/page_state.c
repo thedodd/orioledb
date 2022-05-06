@@ -307,10 +307,6 @@ lock_page_with_tuple(BTreeDescr *desc,
 
 	while (true)
 	{
-		prevState = lock_page_or_list(*blkno);
-		if (!O_PAGE_STATE_IS_LOCKED(prevState))
-			break;
-
 		if (!keySerialized)
 		{
 			BTreeLeafTuphdr tuphdr;
@@ -323,6 +319,7 @@ lock_page_with_tuple(BTreeDescr *desc,
 
 			lockerState->reloids = desc->oids;
 			lockerState->blkno = *blkno;
+			lockerState->reservedUndoSize = get_reserved_undo_size(UndoReserveTxn);
 			lockerState->pageChangeCount = *pageChangeCount;
 			lockerState->tupleFlags = tuple.formatFlags;
 			memcpy(lockerState->tupleData.fixedData,
@@ -333,6 +330,10 @@ lock_page_with_tuple(BTreeDescr *desc,
 				   o_btree_len(desc, tuple, OTupleLength));
 			keySerialized = true;
 		}
+
+		prevState = lock_page_or_list(*blkno);
+		if (!O_PAGE_STATE_IS_LOCKED(prevState))
+			break;
 
 		proclist_push_tail(&O_GET_IN_MEMORY_PAGEDESC(*blkno)->waitersList,
 						   MyProc->pgprocno,
@@ -358,6 +359,7 @@ lock_page_with_tuple(BTreeDescr *desc,
 			{
 				lockerState->blkno = OInvalidInMemoryBlkno;
 				lockerState->inserted = false;
+				giveup_reserved_undo_size(UndoReserveTxn);
 				return false;
 			}
 
