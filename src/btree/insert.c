@@ -549,6 +549,7 @@ merge_waited_tuples(BTreeDescr *desc, BTreeSplitItems *outputItems,
 			}
 		}
 
+		Assert(outputIndex < BTREE_PAGE_MAX_SPLIT_ITEMS);
 		if (cmp > 0)
 		{
 			tupleWaiterInfos[waitersIndex].inserted = true;
@@ -905,7 +906,7 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 			if (!split)
 			{
 				START_CRIT_SECTION();
-				perform_page_compaction(desc, blkno, &items, needsUndo, csn);
+				perform_page_compaction(desc, blkno, &newItems, needsUndo, csn);
 				o_btree_insert_mark_split_finished_if_needed(insert_item);
 				MARK_DIRTY(desc->ppool, blkno);
 				unlock_page(blkno);
@@ -914,7 +915,7 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 			}
 			else
 			{
-				next = o_btree_insert_split(insert_item, &items, offset, csn,
+				next = o_btree_insert_split(insert_item, &newItems, offset, csn,
 											needsUndo, reserve_kind);
 			}
 		}
