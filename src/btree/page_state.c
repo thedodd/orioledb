@@ -310,6 +310,7 @@ lock_page_with_tuple(BTreeDescr *desc,
 		if (!keySerialized)
 		{
 			BTreeLeafTuphdr tuphdr;
+			int			tuplen;
 
 			tuphdr.deleted = false;
 			tuphdr.undoLocation = InvalidUndoLocation;
@@ -325,9 +326,13 @@ lock_page_with_tuple(BTreeDescr *desc,
 			memcpy(lockerState->tupleData.fixedData,
 				   &tuphdr,
 				   BTreeLeafTuphdrSize);
+			tuplen = o_btree_len(desc, tuple, OTupleLength);
 			memcpy(&lockerState->tupleData.fixedData[BTreeLeafTuphdrSize],
 				   tuple.data,
-				   o_btree_len(desc, tuple, OTupleLength));
+				   tuplen);
+			if (tuplen != MAXALIGN(tuplen))
+				memset(&lockerState->tupleData.fixedData[BTreeLeafTuphdrSize + tuplen],
+					   0, MAXALIGN(tuplen) - tuplen);
 			keySerialized = true;
 		}
 

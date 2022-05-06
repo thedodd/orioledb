@@ -452,7 +452,7 @@ merge_waited_tuples(BTreeDescr *desc, BTreeSplitItems *outputItems,
 
 	inputIndex = 0;
 	while (inputIndex < inputItems->itemsCount ||
-		   waitersIndex < tupleWaitersCount)
+		   (waitersIndex < tupleWaitersCount && !finished))
 	{
 		int			cmp;
 
