@@ -980,14 +980,16 @@ btree_page_reorg(BTreeDescr *desc, Page p, BTreePageItem *items,
 	OffsetNumber chunkOffsets[BTREE_PAGE_MAX_CHUNKS + 1];
 	LocationIndex itemsArray[BTREE_PAGE_MAX_CHUNK_ITEMS];
 	int			i,
-				j;
+				j,
+				chunkItemsCount;
 	LocationIndex hikeysFreeSpace,
 				hikeysFreeSpaceLeft;
 	LocationIndex dataFreeSpace,
 				dataFreeSpaceLeft,
 				hikeysEnd;
 	bool		isRightmost = O_PAGE_IS(p, RIGHTMOST);
-	LocationIndex chunkDataSize;
+	LocationIndex chunkDataSize,
+				targetDataSize;
 	LocationIndex maxKeyLen;
 
 	VALGRIND_CHECK_MEM_IS_DEFINED(p, ORIOLEDB_BLCKSZ);
@@ -1001,6 +1003,8 @@ btree_page_reorg(BTreeDescr *desc, Page p, BTreePageItem *items,
 
 	hikeysFreeSpaceLeft = hikeysFreeSpace = hikeysEnd - (MAXALIGN(sizeof(BTreePageHeader)) + MAXALIGN(hikeySize));
 	dataFreeSpaceLeft = dataFreeSpace = (ORIOLEDB_BLCKSZ - hikeysEnd) - totalDataSize - MAXALIGN(sizeof(LocationIndex) * count);
+	targetDataSize = totalDataSize + MAXALIGN(sizeof(LocationIndex) * count);
+	targetDataSize = Max(targetDataSize, (ORIOLEDB_BLCKSZ - hikeysEnd) * 3 / 4);
 
 	/*
 	 * Calculate the chunks count to fit both chunks area and data area.
@@ -1011,8 +1015,12 @@ btree_page_reorg(BTreeDescr *desc, Page p, BTreePageItem *items,
 	chunkOffsets[0] = 0;
 	j = 1;
 	chunkDataSize = 0;
+	chunkItemsCount = 0;
 	if (count >= 1)
+	{
 		chunkDataSize += items[0].size;
+		chunkItemsCount = 1;
+	}
 	if (O_PAGE_IS(p, LEAF) && count > 0)
 		maxKeyLen = Max(maxKeyLen, item_get_key_size(desc, O_PAGE_IS(p, LEAF), &items[0]));
 
@@ -1037,14 +1045,16 @@ btree_page_reorg(BTreeDescr *desc, Page p, BTreePageItem *items,
 			continue;
 		}
 
-		dataSizeRatio = (float4) chunkDataSize / (float4) totalDataSize;
+		dataSizeRatio = (float4) (chunkDataSize + MAXALIGN(sizeof(LocationIndex) * chunkItemsCount)) / (float4) targetDataSize;
 		if (dataSizeRatio >= (float4) (nextKeySize + sizeof(BTreePageChunkDesc)) / (float4) hikeysFreeSpace &&
-			dataSizeRatio >= (float4) dataSpaceDiff / (float4) dataFreeSpace)
+			(float4) chunkDataSize / (float4) totalDataSize >=
+			(float4) dataSpaceDiff / (float4) dataFreeSpace)
 		{
 			hikeysFreeSpaceLeft -= hikeySizeDiff;
 			dataFreeSpaceLeft -= dataSpaceDiff;
 			chunkOffsets[j] = i;
 			chunkDataSize = 0;
+			chunkItemsCount = 0;
 			j++;
 		}
 
