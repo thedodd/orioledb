@@ -36,6 +36,15 @@
 
 #define BTREE_PAGE_MAX_SPLIT_ITEMS (2 * BTREE_PAGE_MAX_CHUNK_ITEMS)
 
+/*
+ * Enable this to recheck page struct on every unlock.
+ */
+/* #define CHECK_PAGE_STRUCT */
+
+#ifdef CHECK_PAGE_STRUCT
+extern void o_check_page_struct(BTreeDescr *desc, Page p);
+#endif
+
 extern Size page_state_shmem_needs(void);
 extern void page_state_shmem_init(Pointer buf, bool found);
 extern bool have_locked_pages(void);
