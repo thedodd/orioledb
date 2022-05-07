@@ -511,7 +511,6 @@ merge_waited_tuples(BTreeDescr *desc, BTreeSplitItems *outputItems,
 				{
 					split = true;
 					rightSpace = ORIOLEDB_BLCKSZ - Max(outputItems->hikeysEnd, MAXALIGN(sizeof(BTreePageHeader)) + outputItems->hikeySize);
-
 				}
 			}
 
@@ -535,16 +534,18 @@ merge_waited_tuples(BTreeDescr *desc, BTreeSplitItems *outputItems,
 						itemSize = inputItems->items[inputIndex + (leftItemsCount - outputIndex - 1)].size;
 
 					leftItemsSize -= itemSize;
-					rightItemsSize -= itemSize;
+					rightItemsSize += itemSize;
 				}
 
 				Assert(rightItemsCount > 0);
 				if (rightItemsSize +
-					MAXALIGN(rightItemsCount * sizeof(LocationIndex)) <=
+					MAXALIGN(rightItemsCount * sizeof(LocationIndex)) >
 					rightSpace)
 				{
 					cmp = -1;
 					finished = true;
+					if (inputIndex >= inputItems->itemsCount)
+						break;
 				}
 			}
 		}
@@ -556,7 +557,9 @@ merge_waited_tuples(BTreeDescr *desc, BTreeSplitItems *outputItems,
 			outputItems->items[outputIndex++] = tupleWaiterInfos[waitersIndex++].item;
 		}
 		else if (cmp < 0)
+		{
 			outputItems->items[outputIndex++] = inputItems->items[inputIndex++];
+		}
 	}
 
 	outputItems->itemsCount = outputIndex;
