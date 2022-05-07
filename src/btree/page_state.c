@@ -39,10 +39,9 @@
 #define MAX_PAGES_PER_PROCESS 8
 
 /*
- * Enable this to recheck page starts and struct on every unlock.
+ * Enable this to recheck page stats on every unlock.
  */
 /* #define CHECK_PAGE_STATS */
-/* #define CHECK_PAGE_STRUCT */
 
 typedef struct
 {
@@ -57,9 +56,6 @@ static int	numberOfMyInProgressSplitPages = 0;
 
 LockerShmemState *lockerStates = NULL;
 
-#ifdef CHECK_PAGE_STRUCT
-static void o_check_page_struct(BTreeDescr *desc, Page p);
-#endif
 #ifdef CHECK_PAGE_STATS
 static void o_check_btree_page_statistics(BTreeDescr *desc, Pointer p);
 #endif
@@ -1073,6 +1069,9 @@ btree_split_mark_finished(OInMemoryBlkno left_blkno, bool use_lock, bool success
 }
 
 #ifdef CHECK_PAGE_STRUCT
+
+extern void log_btree(BTreeDescr *desc);
+
 /*
  * Check if page has a consistent structure.
  */
@@ -1085,14 +1084,28 @@ o_check_page_struct(BTreeDescr *desc, Page p)
 				itemsCount;
 	LocationIndex endLocation,
 				chunkSize;
+	OTuple		prevChunkHikey;
 
 	Assert(header->dataSize <= ORIOLEDB_BLCKSZ);
 	Assert(header->hikeysEnd <= header->dataSize);
+
+	O_TUPLE_SET_NULL(prevChunkHikey);
 
 	for (i = 0; i < header->chunksCount; i++)
 	{
 		BTreePageChunkDesc *chunk = &header->chunkDesc[i];
 		BTreePageChunk *chunkData;
+		OTuple		chunkHikey;
+
+		if (O_PAGE_IS(p, RIGHTMOST) && i == header->chunksCount - 1)
+		{
+			O_TUPLE_SET_NULL(chunkHikey);
+		}
+		else
+		{
+			chunkHikey.formatFlags = header->chunkDesc[i].hikeyFlags;
+			chunkHikey.data = p + SHORT_GET_LOCATION(header->chunkDesc[i].hikeyShortLocation);
+		}
 
 		if (i > 0)
 		{
@@ -1150,6 +1163,10 @@ o_check_page_struct(BTreeDescr *desc, Page p)
 				{
 					tuple.data = (Pointer) chunkData + ITEM_GET_OFFSET(chunkData->items[j]) + BTreeLeafTuphdrSize;
 					len = BTreeLeafTuphdrSize + o_btree_len(desc, tuple, OTupleLength);
+					if (!O_TUPLE_IS_NULL(chunkHikey))
+						Assert(o_btree_cmp(desc, &tuple, BTreeKeyLeafTuple, &chunkHikey, BTreeKeyNonLeafKey) < 0);
+					if (!O_TUPLE_IS_NULL(prevChunkHikey))
+						Assert(o_btree_cmp(desc, &tuple, BTreeKeyLeafTuple, &prevChunkHikey, BTreeKeyNonLeafKey) >= 0);
 				}
 				else
 				{
@@ -1162,6 +1179,10 @@ o_check_page_struct(BTreeDescr *desc, Page p)
 						tuple.data = (Pointer) chunkData + ITEM_GET_OFFSET(chunkData->items[j]) + BTreeNonLeafTuphdrSize;
 						len = BTreeNonLeafTuphdrSize + o_btree_len(desc, tuple, OKeyLength);
 					}
+					if (!O_TUPLE_IS_NULL(chunkHikey))
+						Assert(o_btree_cmp(desc, &tuple, BTreeKeyNonLeafKey, &chunkHikey, BTreeKeyNonLeafKey) < 0);
+					if (!O_TUPLE_IS_NULL(prevChunkHikey))
+						Assert(o_btree_cmp(desc, &tuple, BTreeKeyNonLeafKey, &prevChunkHikey, BTreeKeyNonLeafKey) >= 0);
 				}
 
 				if (j < itemsCount - 1)
@@ -1171,6 +1192,8 @@ o_check_page_struct(BTreeDescr *desc, Page p)
 
 			}
 		}
+
+		prevChunkHikey = chunkHikey;
 	}
 
 }
