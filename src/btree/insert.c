@@ -527,7 +527,10 @@ merge_waited_tuples(BTreeDescr *desc, BTreeSplitItems *outputItems,
 					rightItemsCount++;
 
 					if (leftItemsCount < outputIndex)
+					{
+						Assert(outputIndex > 0);
 						itemSize = outputItems->items[leftItemsCount].size;
+					}
 					else if (leftItemsCount == outputIndex)
 						itemSize = tupleWaiterInfos[waitersIndex].item.size;
 					else
