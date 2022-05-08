@@ -316,7 +316,10 @@ lock_page_with_tuple(BTreeDescr *desc,
 
 			lockerState->reloids = desc->oids;
 			lockerState->blkno = *blkno;
-			lockerState->reservedUndoSize = get_reserved_undo_size(UndoReserveTxn);
+			if (desc->undoType == UndoReserveTxn)
+				lockerState->reservedUndoSize = get_reserved_undo_size(UndoReserveTxn);
+			else
+				lockerState->reservedUndoSize = 0;
 			lockerState->pageChangeCount = *pageChangeCount;
 			lockerState->tupleFlags = tuple.formatFlags;
 			memcpy(lockerState->tupleData.fixedData,
@@ -360,7 +363,8 @@ lock_page_with_tuple(BTreeDescr *desc,
 			{
 				lockerState->blkno = OInvalidInMemoryBlkno;
 				lockerState->inserted = false;
-				giveup_reserved_undo_size(UndoReserveTxn);
+				if (desc->undoType != UndoReserveNone)
+					giveup_reserved_undo_size(UndoReserveTxn);
 				return false;
 			}
 
