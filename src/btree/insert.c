@@ -741,7 +741,7 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 		TupleWaiterInfo tupleWaiterInfos[BTREE_PAGE_MAX_SPLIT_ITEMS];
 		int			tupleWaitersCount;
 
-		bool		next;
+		bool		next = false;
 
 		if (insert_item->level > 0)
 			kind = BTreeKeyNonLeafKey;
