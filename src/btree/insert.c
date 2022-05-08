@@ -902,10 +902,15 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 					LockerShmemState *lockerState = &lockerStates[tupleWaiterInfos[i].pgprocno];
 
 					tupleWaiterProcnums[waitersWakeupCount++] = tupleWaiterInfos[i].pgprocno;
-					steal_reserved_undo_size(UndoReserveTxn, lockerState->reservedUndoSize);
 
-					make_waiter_undo_record(desc, tupleWaiterInfos[i].pgprocno,
-											lockerState);
+					if (desc->undoType == UndoReserveTxn)
+					{
+						steal_reserved_undo_size(UndoReserveTxn,
+												 lockerState->reservedUndoSize);
+						make_waiter_undo_record(desc,
+												tupleWaiterInfos[i].pgprocno,
+												lockerState);
+					}
 				}
 			}
 
