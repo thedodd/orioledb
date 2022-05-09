@@ -732,7 +732,7 @@ tuple_waiters_check_hikey(BTreeDescr *desc, Page p,
 
 	while (count > 0)
 	{
-		OTuple	waiterTup;
+		OTuple		waiterTup;
 
 		waiterTup.formatFlags = tupleWaiterInfos[count - 1].item.flags;
 		waiterTup.data = tupleWaiterInfos[count - 1].item.data + BTreeLeafTuphdrSize;
