@@ -594,7 +594,9 @@ o_btree_insert_split(BTreeInsertStackItem *insert_item,
 					 bool needsUndo,
 					 int reserve_kind,
 					 int *waitersWakeupProcnums,
-					 int waitersWakeupCount)
+					 int waitersWakeupCount,
+					 TupleWaiterInfo *unmergedWaiters,
+					 int unmergedWaitersCount)
 {
 	OffsetNumber left_count;
 	OBTreeFindPageContext *curContext = insert_item->context;
@@ -644,8 +646,8 @@ o_btree_insert_split(BTreeInsertStackItem *insert_item,
 
 	if (waitersWakeupCount > 0)
 		wakeup_waiters_with_tuples(blkno,
-									waitersWakeupProcnums,
-									waitersWakeupCount);
+								   waitersWakeupProcnums,
+								   waitersWakeupCount);
 
 	o_btree_insert_mark_split_finished_if_needed(insert_item);
 	insert_item->left_blkno = blkno;
@@ -667,13 +669,33 @@ o_btree_insert_split(BTreeInsertStackItem *insert_item,
 	}
 	else
 	{
+		int			i,
+					moveToRightCount;
+
 		/* node and leafs split */
 		btree_register_inprogress_split(blkno);
 		if (insert_item->level == 0)
 			pg_atomic_fetch_add_u32(&BTREE_GET_META(desc)->leafPagesNum, 1);
 		END_CRIT_SECTION();
 
-		unlock_page_after_split(desc, blkno, right_blkno, split_key);
+		for (i = 0; i < unmergedWaitersCount; i++)
+		{
+			OTuple		tup;
+
+			tup.formatFlags = unmergedWaiters[i].item.flags;
+			tup.data = unmergedWaiters[i].item.data + BTreeLeafTuphdrSize;
+			if (o_btree_cmp(desc,
+							&tup, BTreeKeyLeafTuple,
+							&split_key, BTreeKeyNonLeafKey) >= 0)
+				break;
+		}
+
+		moveToRightCount = 0;
+		for (; i < unmergedWaitersCount; i++)
+			waitersWakeupProcnums[moveToRightCount++] = unmergedWaiters[i].pgprocno;
+
+		unlock_page_after_split(desc, blkno, right_blkno,
+								waitersWakeupProcnums, moveToRightCount);
 
 		curContext->index--;
 		insert_item->refind = true;
@@ -977,7 +999,9 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 				next = o_btree_insert_split(insert_item, &newItems, offset, csn,
 											needsUndo, reserve_kind,
 											tupleWaiterProcnums,
-											waitersWakeupCount);
+											waitersWakeupCount,
+											&tupleWaiterInfos[waitersWakeupCount],
+											tupleWaitersCount - waitersWakeupCount);
 			}
 		}
 		else
@@ -1151,7 +1175,7 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 							 csn);
 
 			next = o_btree_insert_split(insert_item, &items, offset, csn,
-										needsUndo, reserve_kind, NULL, 0);
+										needsUndo, reserve_kind, NULL, 0, NULL, 0);
 		}
 
 		if (next)

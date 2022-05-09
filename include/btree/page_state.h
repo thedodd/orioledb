@@ -64,10 +64,9 @@ extern void delare_page_as_locked(OInMemoryBlkno blkno);
 extern bool page_is_locked(OInMemoryBlkno blkno);
 extern void page_block_reads(OInMemoryBlkno blkno);
 extern void unlock_page(OInMemoryBlkno blkno);
-extern void unlock_page_after_split(BTreeDescr *desc,
-									OInMemoryBlkno blkno,
+extern void unlock_page_after_split(BTreeDescr *desc, OInMemoryBlkno blkno,
 									OInMemoryBlkno rightBlkno,
-									OTuple hikey);
+									int *procnums, int procnumsCount);
 extern void release_all_page_locks(void);
 extern void page_wait_for_read_enable(OInMemoryBlkno blkno);
 extern void btree_register_inprogress_split(OInMemoryBlkno left_blkno);

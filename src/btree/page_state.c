@@ -717,7 +717,7 @@ wakeup_waiters_with_tuples(OInMemoryBlkno blkno,
 static void
 wakeup_waiters_after_split(BTreeDescr *desc,
 						   OInMemoryBlkno blkno, OInMemoryBlkno rightBlkno,
-						   OTuple hikey)
+						   int *procnums, int procnumsCount)
 {
 	Page		p = O_GET_IN_MEMORY_PAGE(blkno);
 	proclist_head wakeup,
@@ -726,39 +726,30 @@ wakeup_waiters_after_split(BTreeDescr *desc,
 	proclist_mutable_iter iter;
 	bool		wokeup_exclusive = false;
 	uint32		mask;
+	int			i;
 
 	proclist_init(&wakeup);
 	proclist_init(&moveToRight);
+
+	for (i = 0; i < procnumsCount; i++)
+	{
+		LockerShmemState *lockerState = &lockerStates[procnums[i]];
+
+		if (lockerState->blkno == blkno &&
+			ORelOidsIsEqual(desc->oids, lockerState->reloids))
+		{
+			proclist_delete(&O_GET_IN_MEMORY_PAGEDESC(blkno)->waitersList, procnums[i], lwWaitLink);
+			proclist_push_tail(&moveToRight, procnums[i], lwWaitLink);
+			moveToRightCount++;
+		}
+	}
 
 	proclist_foreach_modify(iter, &O_GET_IN_MEMORY_PAGEDESC(blkno)->waitersList, lwWaitLink)
 	{
 		PGPROC	   *waiter = GetPGProcByNumber(iter.cur);
 
-		if (waiter->lwWaitMode == LW_EXCLUSIVE)
-		{
-			LockerShmemState *lockerState = &lockerStates[waiter->pgprocno];
-
-			if (lockerState->blkno == blkno &&
-				ORelOidsIsEqual(desc->oids, lockerState->reloids))
-			{
-				OTuple		tuple;
-
-				tuple.formatFlags = lockerState->tupleFlags;
-				tuple.data = &lockerState->tupleData.fixedData[BTreeLeafTuphdrSize];
-
-				if (o_btree_cmp(desc,
-								&tuple, BTreeKeyLeafTuple,
-								&hikey, BTreeKeyNonLeafKey) >= 0)
-				{
-					proclist_delete(&O_GET_IN_MEMORY_PAGEDESC(blkno)->waitersList, iter.cur, lwWaitLink);
-					proclist_push_tail(&moveToRight, iter.cur, lwWaitLink);
-					moveToRightCount++;
-					continue;
-				}
-			}
-			if (wokeup_exclusive)
-				continue;
-		}
+		if (waiter->lwWaitMode == LW_EXCLUSIVE && wokeup_exclusive)
+			continue;
 
 		proclist_delete(&O_GET_IN_MEMORY_PAGEDESC(blkno)->waitersList, iter.cur, lwWaitLink);
 		proclist_push_tail(&wakeup, iter.cur, lwWaitLink);
@@ -947,12 +938,13 @@ unlock_page(OInMemoryBlkno blkno)
 void
 unlock_page_after_split(BTreeDescr *desc,
 						OInMemoryBlkno blkno, OInMemoryBlkno rightBlkno,
-						OTuple hikey)
+						int *procnums, int procnumsCount)
 {
 	uint32		state = unlock_page_internal(blkno);
 
 	if (state & PAGE_STATE_HAS_WAITERS_FLAG)
-		wakeup_waiters_after_split(desc, blkno, rightBlkno, hikey);
+		wakeup_waiters_after_split(desc, blkno, rightBlkno,
+								   procnums, procnumsCount);
 }
 
 /*
