@@ -695,6 +695,36 @@ o_btree_insert_split(BTreeInsertStackItem *insert_item,
 	return next;
 }
 
+static void
+tuple_waiters_check_hikey(BTreeDescr *desc, Page p,
+						  TupleWaiterInfo tupleWaiterInfos[BTREE_PAGE_MAX_SPLIT_ITEMS],
+						  int *tupleWaitersCount)
+{
+	OTuple		hikey;
+	int			count = (*tupleWaitersCount);
+
+	if (O_PAGE_IS(p, RIGHTMOST))
+		return;
+
+	BTREE_PAGE_GET_HIKEY(hikey, p);
+
+	while (count > 0)
+	{
+		OTuple	waiterTup;
+
+		waiterTup.formatFlags = tupleWaiterInfos[count - 1].item.flags;
+		waiterTup.data = tupleWaiterInfos[count - 1].item.data + BTreeLeafTuphdrSize;
+
+		if (o_btree_cmp(desc,
+						&waiterTup, BTreeKeyLeafTuple,
+						&hikey, BTreeKeyNonLeafKey) < 0)
+			break;
+		count--;
+	}
+
+	(*tupleWaitersCount) = count;
+}
+
 static bool
 o_btree_insert_needs_page_undo(BTreeDescr *desc, Page p)
 {
@@ -743,6 +773,7 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 		int			tupleWaiterProcnums[BTREE_PAGE_MAX_SPLIT_ITEMS];
 		TupleWaiterInfo tupleWaiterInfos[BTREE_PAGE_MAX_SPLIT_ITEMS];
 		int			tupleWaitersCount;
+		int			insertSize;
 
 		bool		next = false;
 
@@ -832,7 +863,23 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 		newItemSize = MAXALIGN(insert_item->tuplen) + tupheaderlen;
 
 		if (insert_item->level == 0)
+		{
 			tupleWaitersCount = get_waiters_with_tuples(desc, blkno, tupleWaiterProcnums);
+			insertSize = get_tuple_waiter_infos(desc,
+												tupleWaiterProcnums,
+												tupleWaiterInfos,
+												tupleWaitersCount);
+
+			qsort_arg(tupleWaiterInfos,
+					  tupleWaitersCount,
+					  sizeof(TupleWaiterInfo),
+					  waiter_info_cmp,
+					  desc);
+
+			tuple_waiters_check_hikey(desc, p,
+									  tupleWaiterInfos,
+									  &tupleWaitersCount);
+		}
 		else
 			tupleWaitersCount = 0;
 
@@ -840,8 +887,7 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 		{
 			BTreeSplitItems items;
 			BTreeSplitItems newItems;
-			int			insertSize,
-						insertCount,
+			int			insertCount,
 						i,
 						waitersWakeupCount = 0;
 			CommitSeqNo csn;
@@ -850,10 +896,6 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 			OffsetNumber offset;
 			bool		split;
 
-			insertSize = get_tuple_waiter_infos(desc,
-												tupleWaiterProcnums,
-												tupleWaiterInfos,
-												tupleWaitersCount);
 			insertCount = tupleWaitersCount;
 
 			if (!insert_item->replace)
@@ -888,12 +930,6 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 							 insert_item->tuplen,
 							 insert_item->replace,
 							 csn);
-
-			qsort_arg(tupleWaiterInfos,
-					  tupleWaitersCount,
-					  sizeof(TupleWaiterInfo),
-					  waiter_info_cmp,
-					  desc);
 
 			split = merge_waited_tuples(desc, &newItems, &items,
 										tupleWaiterInfos,
@@ -960,11 +996,8 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 										 pg_atomic_read_u64(&ShmemVariableCache->nextCommitSeqNo));
 		}
 
-		if (tupleWaitersCount > 0)
-		{
-
-		}
-		else if (fit != BTreeItemPageFitSplitRequired)
+		if (tupleWaitersCount <= 0 &&
+			fit != BTreeItemPageFitSplitRequired)
 		{
 			BTreePageHeader *header = (BTreePageHeader *) p;
 			BTreeLeafTuphdr prev = {0, 0};
@@ -1090,7 +1123,7 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 
 			next = true;
 		}
-		else
+		else if (tupleWaitersCount <= 0)
 		{
 			/*
 			 * No way to fit into the current page.  We have to split the

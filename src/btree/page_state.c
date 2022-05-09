@@ -641,17 +641,12 @@ get_waiters_with_tuples(BTreeDescr *desc,
 {
 	Page		p = O_GET_IN_MEMORY_PAGE(blkno);
 	int			count = 0;
-	OTuple		hikey;
 	proclist_mutable_iter iter;
 
 	if (!(pg_atomic_read_u32(&(O_PAGE_HEADER(p)->state)) &
 		  PAGE_STATE_HAS_WAITERS_FLAG))
 		return 0;
 
-	if (!O_PAGE_IS(p, RIGHTMOST))
-		BTREE_PAGE_GET_HIKEY(hikey, p);
-	else
-		O_TUPLE_SET_NULL(hikey);
 	(void) lock_page_list(blkno);
 
 	proclist_foreach_modify(iter,
@@ -671,11 +666,7 @@ get_waiters_with_tuples(BTreeDescr *desc,
 			tuple.formatFlags = lockerState->tupleFlags;
 			tuple.data = &lockerState->tupleData.fixedData[BTreeLeafTuphdrSize];
 
-			if (O_TUPLE_IS_NULL(hikey) ||
-				o_btree_cmp(desc,
-							&tuple, BTreeKeyLeafTuple,
-							&hikey, BTreeKeyNonLeafKey) < 0)
-				result[count++] = iter.cur;
+			result[count++] = iter.cur;
 			if (count >= BTREE_PAGE_MAX_SPLIT_ITEMS)
 			{
 				Assert(count == BTREE_PAGE_MAX_SPLIT_ITEMS);
@@ -722,7 +713,6 @@ wakeup_waiters_with_tuples(OInMemoryBlkno blkno,
 	(void) pg_atomic_fetch_and_u32(&(O_PAGE_HEADER(p)->state), mask);
 
 }
-
 
 static void
 wakeup_waiters_after_split(BTreeDescr *desc,
