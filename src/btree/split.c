@@ -234,7 +234,9 @@ btree_page_split_location(BTreeDescr *desc,
 		{
 			/* Try place item to the left page */
 			Assert(leftPageSpaceLeft > 0);
-			leftPageSpaceLeft -= items->items[minLeftPageItemsCount].size;
+			leftPageSpaceLeft -= items->items[minLeftPageItemsCount].size +
+				MAXALIGN(sizeof(LocationIndex) * (minLeftPageItemsCount + 1)) -
+				MAXALIGN(sizeof(LocationIndex) * minLeftPageItemsCount);
 			if (leftPageSpaceLeft < 0)
 				continue;
 			minLeftPageItemsCount++;
@@ -243,7 +245,9 @@ btree_page_split_location(BTreeDescr *desc,
 		{
 			/* Try place item to the right page */
 			Assert(rightPageSpaceLeft > 0);
-			rightPageSpaceLeft -= items->items[maxLeftPageItemsCount - 1].size;
+			rightPageSpaceLeft -= items->items[maxLeftPageItemsCount - 1].size +
+				MAXALIGN(sizeof(LocationIndex) * (items->itemsCount - maxLeftPageItemsCount + 1)) -
+				MAXALIGN(sizeof(LocationIndex) * (items->itemsCount - maxLeftPageItemsCount));
 			if (rightPageSpaceLeft < 0)
 			{
 				continue;
