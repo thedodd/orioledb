@@ -583,8 +583,6 @@ get_waiters_with_tuples(BTreeDescr *desc,
 	uint32		pgprocnum;
 	int			count = 0;
 
-	return 0;
-
 	pgprocnum = pg_atomic_read_u32(&(O_PAGE_HEADER(p)->state)) & PAGE_STATE_LIST_TAIL_MASK;
 
 	while (pgprocnum != PAGE_STATE_INVALID_PROCNO)
@@ -713,13 +711,16 @@ wakeup_waiters_with_tuples(OInMemoryBlkno blkno,
 	{
 		LockerShmemState *lockerState = &lockerStates[pgprocnum];
 		PGPROC	   *waiter = GetPGProcByNumber(pgprocnum);
+		uint32		next = lockerState->next;
+
+		pg_read_barrier();
 
 		lockerState->pageWaiting = false;
 
 		pg_write_barrier();
 
 		PGSemaphoreUnlock(waiter->sem);
-		pgprocnum = lockerState->next;
+		pgprocnum = next;
 	}
 }
 
