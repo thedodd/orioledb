@@ -583,6 +583,8 @@ get_waiters_with_tuples(BTreeDescr *desc,
 	uint32		pgprocnum;
 	int			count = 0;
 
+	return 0;
+
 	pgprocnum = pg_atomic_read_u32(&(O_PAGE_HEADER(p)->state)) & PAGE_STATE_LIST_TAIL_MASK;
 
 	while (pgprocnum != PAGE_STATE_INVALID_PROCNO)
@@ -692,8 +694,15 @@ wakeup_waiters_with_tuples(OInMemoryBlkno blkno,
 		newState = state & (~PAGE_STATE_LIST_TAIL_MASK);
 		newState |= newTail;
 
-		if (pg_atomic_compare_exchange_u32(&header->state, &state, newState))
+		if (newTail != tail)
+		{
+			if (pg_atomic_compare_exchange_u32(&header->state, &state, newState))
+				break;
+		}
+		else
+		{
 			break;
+		}
 
 		prevTail = tail;
 		prevTailReplace = newTail;
@@ -703,18 +712,11 @@ wakeup_waiters_with_tuples(OInMemoryBlkno blkno,
 	while (pgprocnum != PAGE_STATE_INVALID_PROCNO)
 	{
 		LockerShmemState *lockerState = &lockerStates[pgprocnum];
+		PGPROC	   *waiter = GetPGProcByNumber(pgprocnum);
 
 		lockerState->pageWaiting = false;
-		pgprocnum = lockerState->next;
-	}
 
-	pg_write_barrier();
-
-	pgprocnum = wakeupTail;
-	while (pgprocnum != PAGE_STATE_INVALID_PROCNO)
-	{
-		LockerShmemState *lockerState = &lockerStates[pgprocnum];
-		PGPROC	   *waiter = GetPGProcByNumber(pgprocnum);
+		pg_write_barrier();
 
 		PGSemaphoreUnlock(waiter->sem);
 		pgprocnum = lockerState->next;
@@ -1012,12 +1014,14 @@ unlock_page(OInMemoryBlkno blkno)
 	{
 		LockerShmemState *lockerState = &lockerStates[pgprocnum];
 		PGPROC	   *waiter = GetPGProcByNumber(pgprocnum);
+		uint32		next = lockerState->next;
 
 		lockerState->pageWaiting = false;
 
 		pg_write_barrier();
 		PGSemaphoreUnlock(waiter->sem);
-		pgprocnum = lockerState->next;
+
+		pgprocnum = next;
 	}
 }
 
