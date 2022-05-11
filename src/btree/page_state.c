@@ -976,6 +976,9 @@ unlock_page(OInMemoryBlkno blkno)
 			Assert(exclusive != wakeupTail);
 			lockerStates[exclusive].next = wakeupTail;
 			wakeupTail = exclusive;
+
+			if (prevPgprocnum == exclusive)
+				prevPgprocnum = exclusivePrev;
 		}
 
 		/*
@@ -992,7 +995,6 @@ unlock_page(OInMemoryBlkno blkno)
 				Assert(prevPgprocnum != prevTailReplace);
 				lockerStates[prevPgprocnum].next = prevTailReplace;
 			}
-
 		}
 
 		newState = state & (~(PAGE_STATE_LIST_TAIL_MASK | PAGE_STATE_LOCKED_FLAG | PAGE_STATE_NO_READ_FLAG));
@@ -1015,6 +1017,8 @@ unlock_page(OInMemoryBlkno blkno)
 		LockerShmemState *lockerState = &lockerStates[pgprocnum];
 		PGPROC	   *waiter = GetPGProcByNumber(pgprocnum);
 		uint32		next = lockerState->next;
+
+		pg_read_barrier();
 
 		lockerState->pageWaiting = false;
 
