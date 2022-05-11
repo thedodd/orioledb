@@ -373,7 +373,10 @@ typedef struct
 	LocalTransactionId localXid;
 	uint8		tupleFlags;
 	bool		inserted;
+	bool		pageWaiting;
+	bool		waitExclusive;
 	Size		reservedUndoSize;
+	uint32		next;
 	union
 	{
 		char		fixedData[BTreeLeafTuphdrSize + O_BTREE_MAX_KEY_SIZE];
