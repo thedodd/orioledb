@@ -1085,6 +1085,7 @@ btree_page_reorg(BTreeDescr *desc, Page p, BTreePageItem *items,
 
 	header->maxKeyLen = maxKeyLen;
 	header->dataSize = ptr - (Pointer) p;
+	Assert(header->dataSize <= ORIOLEDB_BLCKSZ);
 	header->chunksCount = chunksCount;
 
 	/*
