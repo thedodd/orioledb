@@ -363,8 +363,10 @@ perform_page_split(BTreeDescr *desc, OInMemoryBlkno blkno,
 			   *right_header = (BTreePageHeader *) right_page;
 	bool		leaf = O_PAGE_IS(left_page, LEAF);
 	OTuple		hikey;
+	uint64		rightlink;
 	LocationIndex hikeySize;
 
+	rightlink = left_header->rightLink;
 	init_new_btree_page(desc, new_blkno,
 						left_header->flags & ~(O_BTREE_FLAG_LEFTMOST),
 						PAGE_GET_LEVEL(left_page), false);
@@ -407,9 +409,13 @@ perform_page_split(BTreeDescr *desc, OInMemoryBlkno blkno,
 
 	left_header->csn = csn;
 	right_header->csn = csn;
+	right_header->rightLink = rightlink;
 	left_header->rightLink = MAKE_IN_MEMORY_RIGHTLINK(new_blkno,
 													  O_PAGE_GET_CHANGE_COUNT(right_page));
 	left_header->flags &= ~(O_BTREE_FLAG_RIGHTMOST);
+	if (RightLinkIsValid(rightlink))
+		O_GET_IN_MEMORY_PAGEDESC(RIGHTLINK_GET_BLKNO(rightlink))->leftBlkno = new_blkno;
+	O_GET_IN_MEMORY_PAGEDESC(new_blkno)->leftBlkno = blkno;
 
 	btree_page_reorg(desc, left_page, &items->items[0], left_count,
 					 splitkey_len, splitkey, NULL);

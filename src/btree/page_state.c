@@ -1111,17 +1111,17 @@ release_all_page_locks(void)
  * Must be called within critical section.
  */
 void
-btree_register_inprogress_split(OInMemoryBlkno left_blkno)
+btree_register_inprogress_split(OInMemoryBlkno rightBlkno)
 {
 #ifdef USE_ASSERT_CHECKING
 	int			i;
 
 	for (i = 0; i < numberOfMyInProgressSplitPages; i++)
-		Assert(myInProgressSplitPages[i] != left_blkno);
+		Assert(myInProgressSplitPages[i] != rightBlkno);
 #endif
 	Assert(CritSectionCount > 0);
 	Assert((numberOfMyInProgressSplitPages + 1) <= sizeof(myInProgressSplitPages) / sizeof(myInProgressSplitPages[0]));
-	myInProgressSplitPages[numberOfMyInProgressSplitPages++] = left_blkno;
+	myInProgressSplitPages[numberOfMyInProgressSplitPages++] = rightBlkno;
 }
 
 /*
@@ -1130,7 +1130,7 @@ btree_register_inprogress_split(OInMemoryBlkno left_blkno)
  * Must be calles within critical section.
  */
 void
-btree_unregister_inprogress_split(OInMemoryBlkno left_blkno)
+btree_unregister_inprogress_split(OInMemoryBlkno rightBlkno)
 {
 	int			i;
 
@@ -1138,7 +1138,7 @@ btree_unregister_inprogress_split(OInMemoryBlkno left_blkno)
 	Assert(numberOfMyInProgressSplitPages > 0);
 	for (i = 0; i < numberOfMyInProgressSplitPages; i++)
 	{
-		if (myInProgressSplitPages[i] == left_blkno)
+		if (myInProgressSplitPages[i] == rightBlkno)
 		{
 			numberOfMyInProgressSplitPages--;
 			myInProgressSplitPages[i] = myInProgressSplitPages[numberOfMyInProgressSplitPages];
@@ -1170,25 +1170,40 @@ btree_mark_incomplete_splits(void)
  * It does not call modify_page if use_lock = false.
  */
 void
-btree_split_mark_finished(OInMemoryBlkno left_blkno, bool use_lock, bool success)
+btree_split_mark_finished(OInMemoryBlkno rightBlkno, bool use_lock, bool success)
 {
 	BTreePageHeader *header;
+	OrioleDBPageDesc *rightPageDesc = O_GET_IN_MEMORY_PAGEDESC(rightBlkno);
+	OInMemoryBlkno	leftBlkno;
 
+	leftBlkno = rightPageDesc->leftBlkno;
+	Assert(OInMemoryBlknoIsValid(leftBlkno));
 	if (use_lock)
 	{
-		lock_page(left_blkno);
-		page_block_reads(left_blkno);
+		while (true)
+		{
+			lock_page(leftBlkno);
+			page_block_reads(leftBlkno);
+
+			if (rightPageDesc->leftBlkno == leftBlkno)
+				break;
+
+			unlock_page(leftBlkno);
+			leftBlkno = rightPageDesc->leftBlkno;
+			Assert(OInMemoryBlknoIsValid(leftBlkno));
+		}
 	}
 
-	header = (BTreePageHeader *) O_GET_IN_MEMORY_PAGE(left_blkno);
+	header = (BTreePageHeader *) O_GET_IN_MEMORY_PAGE(leftBlkno);
 
 	Assert(RightLinkIsValid(header->rightLink));
-	Assert(!use_lock || !O_PAGE_IS(O_GET_IN_MEMORY_PAGE(left_blkno), BROKEN_SPLIT));
+	Assert(!use_lock || !O_PAGE_IS(O_GET_IN_MEMORY_PAGE(leftBlkno), BROKEN_SPLIT));
 
 	if (success)
 	{
 		header->flags &= ~O_BTREE_FLAG_BROKEN_SPLIT;
 		header->rightLink = InvalidRightLink;
+		rightPageDesc->leftBlkno = OInvalidInMemoryBlkno;
 	}
 	else
 	{
@@ -1196,7 +1211,7 @@ btree_split_mark_finished(OInMemoryBlkno left_blkno, bool use_lock, bool success
 	}
 
 	if (use_lock)
-		unlock_page(left_blkno);
+		unlock_page(leftBlkno);
 }
 
 #ifdef CHECK_PAGE_STRUCT

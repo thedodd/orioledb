@@ -920,7 +920,7 @@ o_btree_normal_modify(BTreeDescr *desc, BTreeOperationType action,
 		ppool_reserve_pages(desc->ppool, PPOOL_RESERVE_INSERT, 2);
 
 	init_page_find_context(&pageFindContext, desc, COMMITSEQNO_INPROGRESS,
-						   BTREE_PAGE_FIND_MODIFY | BTREE_PAGE_FIND_FIX_LEAF_SPLIT);
+						   BTREE_PAGE_FIND_MODIFY);
 
 	if (action == BTreeOperationInsert && tupleType == BTreeKeyLeafTuple)
 	{

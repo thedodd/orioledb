@@ -680,7 +680,6 @@ ppools_shmem_init(Pointer ptr, bool found)
 			page_descs[i].ionum = -1;
 			page_descs[i].type = 0;
 			page_descs[i].flags = 0;
-			proclist_init(&page_descs[i].waitersList);
 		}
 	}
 }

@@ -71,10 +71,10 @@ extern void unlock_page_after_split(BTreeDescr *desc, OInMemoryBlkno blkno,
 									int *procnums, int procnumsCount);
 extern void release_all_page_locks(void);
 extern void page_wait_for_read_enable(OInMemoryBlkno blkno);
-extern void btree_register_inprogress_split(OInMemoryBlkno left_blkno);
-extern void btree_unregister_inprogress_split(OInMemoryBlkno left_blkno);
+extern void btree_register_inprogress_split(OInMemoryBlkno rightBlkno);
+extern void btree_unregister_inprogress_split(OInMemoryBlkno rightBlkno);
 extern void btree_mark_incomplete_splits(void);
-extern void btree_split_mark_finished(OInMemoryBlkno left_blkno, bool use_lock,
+extern void btree_split_mark_finished(OInMemoryBlkno rightBlkno, bool use_lock,
 									  bool success);
 
 #endif							/* __BTREE_PAGE_STATE_H__ */

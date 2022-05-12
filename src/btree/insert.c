@@ -49,7 +49,7 @@ typedef struct BTreeInsertStackItem
 	/* current level of the insert */
 	int			level;
 	/* blkno of the left page of incomplete split. */
-	OInMemoryBlkno left_blkno;
+	OInMemoryBlkno rightBlkno;
 	/* is current item replace tuple */
 	bool		replace;
 	/* is refind_page must be called */
@@ -229,8 +229,9 @@ o_btree_finish_root_split_internal(BTreeDescr *desc,
 	MARK_DIRTY(desc->ppool, left_blkno);
 	MARK_DIRTY(desc->ppool, desc->rootInfo.rootPageBlkno);
 
-	btree_split_mark_finished(left_blkno, false, true);
-	insert_item->left_blkno = OInvalidInMemoryBlkno;
+	O_GET_IN_MEMORY_PAGEDESC(insert_item->rightBlkno)->leftBlkno = left_blkno;
+	btree_split_mark_finished(insert_item->rightBlkno, false, true);
+	insert_item->rightBlkno = OInvalidInMemoryBlkno;
 
 	btree_page_update_max_key_len(desc, p);
 
@@ -255,6 +256,7 @@ o_btree_fix_page_split(BTreeDescr *desc, OInMemoryBlkno left_blkno)
 	Page		p = O_GET_IN_MEMORY_PAGE(left_blkno);
 	BTreePageHeader *header = (BTreePageHeader *) p;
 	OFixedKey	key;
+	OInMemoryBlkno rightBlkno;
 	int			level = PAGE_GET_LEVEL(p);
 
 	Assert(O_PAGE_IS(p, BROKEN_SPLIT));
@@ -264,7 +266,8 @@ o_btree_fix_page_split(BTreeDescr *desc, OInMemoryBlkno left_blkno)
 	copy_fixed_hikey(desc, &key, p);
 	START_CRIT_SECTION();
 	header->flags &= ~O_BTREE_FLAG_BROKEN_SPLIT;
-	btree_register_inprogress_split(left_blkno);
+	rightBlkno = RIGHTLINK_GET_BLKNO(header->rightLink);
+	btree_register_inprogress_split(rightBlkno);
 	END_CRIT_SECTION();
 	unlock_page(left_blkno);
 
@@ -274,7 +277,7 @@ o_btree_fix_page_split(BTreeDescr *desc, OInMemoryBlkno left_blkno)
 	init_page_find_context(iitem.context, desc, COMMITSEQNO_INPROGRESS, BTREE_PAGE_FIND_MODIFY);
 
 	find_page(iitem.context, &key, BTreeKeyPageHiKey, level + 1);
-	iitem.left_blkno = left_blkno;
+	iitem.rightBlkno = rightBlkno;
 	iitem.replace = false;
 	iitem.refind = false;
 	iitem.level = level + 1;
@@ -322,6 +325,7 @@ o_btree_insert_stack_push_split_item(BTreeInsertStackItem *insert_item,
 	Page		p = O_GET_IN_MEMORY_PAGE(left_blkno);
 	BTreePageHeader *header = (BTreePageHeader *) p;
 	BTreeInsertStackItem *new_item = palloc(sizeof(BTreeInsertStackItem));
+	OInMemoryBlkno	right_blkno;
 
 	/* Should not be here. */
 	Assert(insert_item->context->index != 0);
@@ -343,12 +347,13 @@ o_btree_insert_stack_push_split_item(BTreeInsertStackItem *insert_item,
 	/* Removes broken flag and unlock page. */
 	START_CRIT_SECTION();
 	header->flags &= ~O_BTREE_FLAG_BROKEN_SPLIT;
-	btree_register_inprogress_split(left_blkno);
+	right_blkno = RIGHTLINK_GET_BLKNO(header->rightLink);
+	btree_register_inprogress_split(right_blkno);
 	END_CRIT_SECTION();
 	unlock_page(left_blkno);
 	insert_item->refind = true;
 
-	new_item->left_blkno = left_blkno;
+	new_item->rightBlkno = right_blkno;
 	new_item->refind = true;
 
 	return new_item;
@@ -578,11 +583,11 @@ merge_waited_tuples(BTreeDescr *desc, BTreeSplitItems *outputItems,
 static void
 o_btree_insert_mark_split_finished_if_needed(BTreeInsertStackItem *insert_item)
 {
-	if (insert_item->left_blkno != OInvalidInMemoryBlkno)
+	if (insert_item->rightBlkno != OInvalidInMemoryBlkno)
 	{
-		btree_split_mark_finished(insert_item->left_blkno, true, true);
-		btree_unregister_inprogress_split(insert_item->left_blkno);
-		insert_item->left_blkno = OInvalidInMemoryBlkno;
+		btree_split_mark_finished(insert_item->rightBlkno, true, true);
+		btree_unregister_inprogress_split(insert_item->rightBlkno);
+		insert_item->rightBlkno = OInvalidInMemoryBlkno;
 	}
 }
 
@@ -650,7 +655,7 @@ o_btree_insert_split(BTreeInsertStackItem *insert_item,
 								   waitersWakeupCount);
 
 	o_btree_insert_mark_split_finished_if_needed(insert_item);
-	insert_item->left_blkno = blkno;
+	insert_item->rightBlkno = right_blkno;
 
 	o_btree_split_fill_downlink_item_with_key(insert_item, blkno, false,
 											  split_key, split_key_len,
@@ -673,7 +678,7 @@ o_btree_insert_split(BTreeInsertStackItem *insert_item,
 					moveToRightCount;
 
 		/* node and leafs split */
-		btree_register_inprogress_split(blkno);
+		btree_register_inprogress_split(right_blkno);
 		if (insert_item->level == 0)
 			pg_atomic_fetch_add_u32(&BTREE_GET_META(desc)->leafPagesNum, 1);
 		END_CRIT_SECTION();
@@ -807,7 +812,6 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 			Page		page = O_GET_IN_MEMORY_PAGE(blkno);
 			BTreePageHeader *header = (BTreePageHeader *) page;
 
-			Assert(!RightLinkIsValid(header->rightLink));
 			Assert(insert_item->refind == false);
 #endif
 		}
@@ -1196,7 +1200,7 @@ o_btree_insert_tuple_to_leaf(OBTreeFindPageContext *context,
 	insert_item.tupheader = (Pointer) tuphdr;
 	insert_item.level = 0;
 	insert_item.replace = replace;
-	insert_item.left_blkno = OInvalidInMemoryBlkno;
+	insert_item.rightBlkno = OInvalidInMemoryBlkno;
 	insert_item.refind = false;
 
 	o_btree_insert_item(&insert_item, PPOOL_RESERVE_INSERT);
