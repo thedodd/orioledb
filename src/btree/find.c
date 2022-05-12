@@ -34,6 +34,7 @@ typedef struct
 	uint32		pageChangeCount;
 	PartialPageState *partial;
 	bool		haveLock;
+	bool		inserted;
 } OBTreeFindPageInternalContext;
 
 static bool follow_rightlink(OBTreeFindPageInternalContext *intCxt);
@@ -111,6 +112,7 @@ find_page(OBTreeFindPageContext *context, void *key, BTreeKeyType keyType,
 	intCxt.key = key;
 	intCxt.keyType = keyType;
 	intCxt.targetLevel = targetLevel;
+	intCxt.inserted = false;
 
 	/*
 	 * See description of the function.
@@ -353,6 +355,8 @@ find_page(OBTreeFindPageContext *context, void *key, BTreeKeyType keyType,
 		{
 			if (follow_rightlink(&intCxt))
 			{
+				if (intCxt.inserted)
+					return false;
 				Assert(context->index > 0);
 				Assert(!intCxt.haveLock);
 				step_upward_level(&intCxt);
@@ -619,7 +623,33 @@ follow_rightlink(OBTreeFindPageInternalContext *intCxt)
 
 		if (intCxt->haveLock)
 		{
-			lock_page(intCxt->blkno);
+			if (!O_TUPLE_IS_NULL(context->insertTuple))
+			{
+				bool		upwards = false;
+
+				if (!lock_page_with_tuple(desc,
+										  &intCxt->blkno,
+										  &intCxt->pageChangeCount,
+										  context->insertXactInfo,
+										  context->insertTuple,
+										  &upwards))
+				{
+					intCxt->haveLock = false;
+					if (upwards)
+					{
+						return true;
+					}
+					else
+					{
+						intCxt->inserted = true;
+						return true;
+					}
+				}
+			}
+			else
+			{
+				lock_page(intCxt->blkno);
+			}
 			intCxt->pagePtr = O_GET_IN_MEMORY_PAGE(intCxt->blkno);
 			intCxt->pageChangeCount = O_PAGE_GET_CHANGE_COUNT(intCxt->pagePtr);
 			if (intCxt->pageChangeCount !=
@@ -690,6 +720,7 @@ refind_page(OBTreeFindPageContext *context, void *key, BTreeKeyType keyType,
 	intCxt.targetLevel = level;
 	intCxt.pageChangeCount = _pageChangeCount;
 	intCxt.partial = NULL;
+	intCxt.inserted = false;
 
 retry:
 
@@ -781,6 +812,8 @@ retry:
 	{
 		if (follow_rightlink(&intCxt))
 		{
+			if (intCxt.inserted)
+				return false;
 			Assert(!intCxt.haveLock);
 			return find_page(context, key, keyType, level);
 		}
