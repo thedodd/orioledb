@@ -58,7 +58,8 @@ extern void wakeup_waiters_with_tuples(OInMemoryBlkno blkno,
 extern void lock_page(OInMemoryBlkno blkno);
 extern bool lock_page_with_tuple(BTreeDescr *desc,
 								 OInMemoryBlkno *blkno, uint32 *pageChangeCount,
-								 OTupleXactInfo xactInfo, OTuple tuple);
+								 OTupleXactInfo xactInfo, OTuple tuple,
+								 bool *upwards);
 extern void relock_page(OInMemoryBlkno blkno);
 extern bool try_lock_page(OInMemoryBlkno blkno);
 extern void delare_page_as_locked(OInMemoryBlkno blkno);

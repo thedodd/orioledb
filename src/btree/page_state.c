@@ -295,7 +295,7 @@ lock_page(OInMemoryBlkno blkno)
 bool
 lock_page_with_tuple(BTreeDescr *desc,
 					 OInMemoryBlkno *blkno, uint32 *pageChangeCount,
-					 OTupleXactInfo xactInfo, OTuple tuple)
+					 OTupleXactInfo xactInfo, OTuple tuple, bool *upwards)
 {
 	UsageCountMap *ucm;
 	Page		p = O_GET_IN_MEMORY_PAGE(*blkno);
@@ -304,6 +304,8 @@ lock_page_with_tuple(BTreeDescr *desc,
 	int			extraWaits = 0;
 	LockerShmemState *lockerState = &lockerStates[MyProc->pgprocno];
 	bool		keySerialized = false;
+	char		img[8192];
+	PartialPageState partial;
 
 	Assert(get_my_locked_page_index(*blkno) < 0);
 
@@ -357,29 +359,51 @@ lock_page_with_tuple(BTreeDescr *desc,
 		}
 		pgstat_report_wait_end();
 
-		if (keySerialized)
+		if (keySerialized && lockerState->inserted)
 		{
-			if (lockerState->inserted)
+			lockerState->blkno = OInvalidInMemoryBlkno;
+			lockerState->inserted = false;
+			if (desc->undoType != UndoReserveNone)
+				giveup_reserved_undo_size(UndoReserveTxn);
+
+			/*
+			 * Fix the process wait semaphore's count for any absorbed
+				* wakeups.
+				*/
+			while (extraWaits-- > 0)
+				PGSemaphoreUnlock(MyProc->sem);
+			return false;
+		}
+
+		(void) o_btree_read_page(desc, *blkno, *pageChangeCount, img,
+								 COMMITSEQNO_INPROGRESS, NULL, BTreeKeyNone, NULL,
+								 &partial, NULL, NULL);
+
+		if (!O_PAGE_IS(img, RIGHTMOST))
+		{
+			OTuple	hikey;
+
+			BTREE_PAGE_GET_HIKEY(hikey, img);
+
+			if (o_btree_cmp(desc, &tuple, BTreeKeyLeafTuple,
+							&hikey, BTreeKeyNonLeafKey) >= 0)
 			{
-				lockerState->blkno = OInvalidInMemoryBlkno;
-				lockerState->inserted = false;
-				if (desc->undoType != UndoReserveNone)
-					giveup_reserved_undo_size(UndoReserveTxn);
+				uint64		rightlink = BTREE_PAGE_GET_RIGHTLINK(img);
 
-				/*
-				 * Fix the process wait semaphore's count for any absorbed
-				 * wakeups.
-				 */
-				while (extraWaits-- > 0)
-					PGSemaphoreUnlock(MyProc->sem);
-				return false;
+				if (OInMemoryBlknoIsValid(RIGHTLINK_GET_BLKNO(rightlink)))
+				{
+					lockerState->blkno = *blkno = RIGHTLINK_GET_BLKNO(rightlink);
+					lockerState->pageChangeCount = *pageChangeCount = RIGHTLINK_GET_CHANGECOUNT(rightlink);
+					p = O_GET_IN_MEMORY_PAGE(*blkno);
+					header = (OrioleDBPageHeader *) p;
+					Assert(get_my_locked_page_index(*blkno) < 0);
+				}
+				else
+				{
+					*upwards = true;
+					return false;
+				}
 			}
-
-			*blkno = lockerState->blkno;
-			*pageChangeCount = lockerState->pageChangeCount;
-			p = O_GET_IN_MEMORY_PAGE(*blkno);
-			header = (OrioleDBPageHeader *) p;
-			Assert(get_my_locked_page_index(*blkno) < 0);
 		}
 	}
 
@@ -931,7 +955,8 @@ unlock_page(OInMemoryBlkno blkno)
 		{
 			LockerShmemState *lockerState = &lockerStates[pgprocnum];
 
-			if (!lockerState->waitExclusive)
+			if (!lockerState->waitExclusive ||
+				BlockNumberIsValid(lockerState->blkno))
 			{
 				uint32	next = lockerState->next;
 

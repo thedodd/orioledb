@@ -165,21 +165,39 @@ find_page(OBTreeFindPageContext *context, void *key, BTreeKeyType keyType,
 			}
 			else if (!O_TUPLE_IS_NULL(context->insertTuple))
 			{
+				bool		upwards = false;
+
 				if (!lock_page_with_tuple(desc,
 										  &intCxt.blkno,
 										  &intCxt.pageChangeCount,
 										  context->insertXactInfo,
-										  context->insertTuple))
-					return false;
-				p = O_GET_IN_MEMORY_PAGE(intCxt.blkno);
+										  context->insertTuple,
+										  &upwards))
+				{
+					if (upwards)
+					{
+						wrongChangeCount = true;
+					}
+					else
+					{
+						return false;
+					}
+				}
+				else
+				{
+					intCxt.pagePtr = p;
+					intCxt.haveLock = true;
+					needLock = false;
+					p = O_GET_IN_MEMORY_PAGE(intCxt.blkno);
+				}
 			}
 			else
 			{
 				lock_page(intCxt.blkno);
+				intCxt.pagePtr = p;
+				intCxt.haveLock = true;
+				needLock = false;
 			}
-			intCxt.pagePtr = p;
-			intCxt.haveLock = true;
-			needLock = false;
 		}
 		else
 		{
@@ -680,12 +698,20 @@ retry:
 	{
 		if (!O_TUPLE_IS_NULL(context->insertTuple))
 		{
+			bool	upwards = false;
+
 			if (!lock_page_with_tuple(desc,
 									  &intCxt.blkno,
 									  &intCxt.pageChangeCount,
 									  context->insertXactInfo,
-									  context->insertTuple))
-				return false;
+									  context->insertTuple,
+									  &upwards))
+			{
+				if (upwards)
+					return find_page(context, key, keyType, level);
+				else
+					return false;
+			}
 		}
 		else
 		{
