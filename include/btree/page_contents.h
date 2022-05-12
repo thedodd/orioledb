@@ -375,6 +375,7 @@ typedef struct
 	bool		inserted;
 	bool		pageWaiting;
 	bool		waitExclusive;
+	bool		split;
 	Size		reservedUndoSize;
 	uint32		next;
 	union

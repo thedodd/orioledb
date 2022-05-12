@@ -81,6 +81,7 @@ page_state_shmem_init(Pointer buf, bool found)
 			lockerStates[i].blkno = OInvalidInMemoryBlkno;
 			lockerStates[i].inserted = false;
 			lockerStates[i].pageWaiting = false;
+			lockerStates[i].split = false;
 		}
 	}
 }
@@ -311,6 +312,9 @@ lock_page_with_tuple(BTreeDescr *desc,
 
 	while (true)
 	{
+		lockerState->blkno = *blkno;
+		lockerState->pageChangeCount = *pageChangeCount;
+
 		if (!keySerialized)
 		{
 			BTreeLeafTuphdr tuphdr;
@@ -323,12 +327,10 @@ lock_page_with_tuple(BTreeDescr *desc,
 			tuphdr.xactInfo = xactInfo;
 
 			lockerState->reloids = desc->oids;
-			lockerState->blkno = *blkno;
 			if (desc->undoType == UndoReserveTxn)
 				lockerState->reservedUndoSize = get_reserved_undo_size(UndoReserveTxn);
 			else
 				lockerState->reservedUndoSize = 0;
-			lockerState->pageChangeCount = *pageChangeCount;
 			lockerState->tupleFlags = tuple.formatFlags;
 			memcpy(lockerState->tupleData.fixedData,
 				   &tuphdr,
@@ -375,6 +377,12 @@ lock_page_with_tuple(BTreeDescr *desc,
 			return false;
 		}
 
+		if (!lockerState->split)
+			continue;
+
+
+		lockerState->blkno = OInvalidInMemoryBlkno;
+		lockerState->split = false;
 		(void) o_btree_read_page(desc, *blkno, *pageChangeCount, img,
 								 COMMITSEQNO_INPROGRESS, NULL, BTreeKeyNone, NULL,
 								 &partial, NULL, NULL);
@@ -401,6 +409,8 @@ lock_page_with_tuple(BTreeDescr *desc,
 				else
 				{
 					*upwards = true;
+					while (extraWaits-- > 0)
+						PGSemaphoreUnlock(MyProc->sem);
 					return false;
 				}
 			}
@@ -924,8 +934,8 @@ unlock_check_page(OInMemoryBlkno blkno)
 /*
  * Unlock the page.  Page should be locked before.
  */
-void
-unlock_page(OInMemoryBlkno blkno)
+static void
+unlock_page_internal(OInMemoryBlkno blkno, bool split)
 {
 	Page		p = O_GET_IN_MEMORY_PAGE(blkno);
 	OrioleDBPageHeader *header = (OrioleDBPageHeader *) p;
@@ -956,9 +966,12 @@ unlock_page(OInMemoryBlkno blkno)
 			LockerShmemState *lockerState = &lockerStates[pgprocnum];
 
 			if (!lockerState->waitExclusive ||
-				BlockNumberIsValid(lockerState->blkno))
+				(split && BlockNumberIsValid(lockerState->blkno)))
 			{
 				uint32	next = lockerState->next;
+
+				if (split && BlockNumberIsValid(lockerState->blkno))
+					lockerState->split = true;
 
 				/* Remove from the waiters list */
 				if (prevPgprocnum == PAGE_STATE_INVALID_PROCNO)
@@ -1055,6 +1068,12 @@ unlock_page(OInMemoryBlkno blkno)
 	}
 }
 
+void
+unlock_page(OInMemoryBlkno blkno)
+{
+	unlock_page_internal(blkno, false);
+}
+
 /*
  * Unlock the page after page split.  Page should be locked before.
  */
@@ -1063,7 +1082,7 @@ unlock_page_after_split(BTreeDescr *desc,
 						OInMemoryBlkno blkno, OInMemoryBlkno rightBlkno,
 						int *procnums, int procnumsCount)
 {
-	unlock_page(blkno);
+	unlock_page_internal(blkno, true);
 #ifdef NOT_USED
 	uint32		state = unlock_page_internal(blkno);
 

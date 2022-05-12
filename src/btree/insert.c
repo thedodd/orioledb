@@ -678,21 +678,7 @@ o_btree_insert_split(BTreeInsertStackItem *insert_item,
 			pg_atomic_fetch_add_u32(&BTREE_GET_META(desc)->leafPagesNum, 1);
 		END_CRIT_SECTION();
 
-		for (i = 0; i < unmergedWaitersCount; i++)
-		{
-			OTuple		tup;
-
-			tup.formatFlags = unmergedWaiters[i].item.flags;
-			tup.data = unmergedWaiters[i].item.data + BTreeLeafTuphdrSize;
-			if (o_btree_cmp(desc,
-							&tup, BTreeKeyLeafTuple,
-							&split_key, BTreeKeyNonLeafKey) >= 0)
-				break;
-		}
-
 		moveToRightCount = 0;
-		for (; i < unmergedWaitersCount; i++)
-			waitersWakeupProcnums[moveToRightCount++] = unmergedWaiters[i].pgprocno;
 
 		unlock_page_after_split(desc, blkno, right_blkno,
 								waitersWakeupProcnums, moveToRightCount);
