@@ -37,6 +37,7 @@
 
 #define GET_UNDO_REC(loc) (o_undo_buffers + (loc) % undo_circular_buffer_size)
 #define UNDO_FILE_SIZE (0x4000000)
+#define UNDO_WRITE_STEP (0x1000000)
 
 static int	undoLocCmp(const pairingheap_node *a, const pairingheap_node *b, void *arg);
 
@@ -787,7 +788,7 @@ write_undo(UndoLocation targetUndoLocation,
 	/* Try to write 5% of the whole undo size if possible */
 	writtenLocation = pg_atomic_read_u64(&undo_meta->writtenLocation);
 	retainUndoLocation = Max(retainUndoLocation, writtenLocation);
-	targetUndoLocation = Max(targetUndoLocation, writtenLocation + undo_circular_buffer_size / 20);
+	targetUndoLocation = Max(targetUndoLocation, writtenLocation + Min(UNDO_WRITE_STEP, undo_circular_buffer_size / 20));
 	targetUndoLocation = Min(targetUndoLocation, minProcReservedLocation);
 
 	Assert(targetUndoLocation >= pg_atomic_read_u64(&undo_meta->writeInProgressLocation));
@@ -891,8 +892,8 @@ reserve_undo_size_extended(UndoReserveType type, Size size,
 		 * It should be enough to just wait for current in-progress write to
 		 * be finished.
 		 */
-		LWLockAcquire(&undo_meta->undoWriteLock, LW_SHARED);
-		LWLockRelease(&undo_meta->undoWriteLock);
+		if (LWLockAcquireOrWait(&undo_meta->undoWriteLock, LW_SHARED))
+			LWLockRelease(&undo_meta->undoWriteLock);
 
 		SpinLockAcquire(&undo_meta->minUndoLocationsMutex);
 		Assert(location + size <= pg_atomic_read_u64(&undo_meta->writtenLocation) + undo_circular_buffer_size);
@@ -931,7 +932,15 @@ fsync_undo_range(UndoLocation fromLoc, UndoLocation toLoc, uint32 wait_event_inf
 	}
 	else
 	{
-		write_undo(toLoc, minProcReservedLocation, false);
+		UndoLocation writtenLocation = pg_atomic_read_u64(&undo_meta->writtenLocation),
+				targetLocation;
+
+		while (writtenLocation < toLoc)
+		{
+			targetLocation = Min(writtenLocation + UNDO_WRITE_STEP, toLoc);
+			write_undo(toLoc, minProcReservedLocation, false);
+			writtenLocation = targetLocation;
+		}
 	}
 
 	o_buffers_sync(&buffersDesc, fromLoc, toLoc, wait_event_info);
