@@ -654,9 +654,6 @@ o_btree_insert_split(BTreeInsertStackItem *insert_item,
 								   waitersWakeupProcnums,
 								   waitersWakeupCount);
 
-	o_btree_insert_mark_split_finished_if_needed(insert_item);
-	insert_item->rightBlkno = right_blkno;
-
 	o_btree_split_fill_downlink_item_with_key(insert_item, blkno, false,
 											  split_key, split_key_len,
 											  internal_header);
@@ -664,6 +661,9 @@ o_btree_insert_split(BTreeInsertStackItem *insert_item,
 	if (blkno == desc->rootInfo.rootPageBlkno)
 	{
 		Assert(curContext->index == 0);
+
+		o_btree_insert_mark_split_finished_if_needed(insert_item);
+		insert_item->rightBlkno = right_blkno;
 
 		blkno = o_btree_finish_root_split_internal(desc,
 												   root_split_left_blkno,
@@ -681,7 +681,6 @@ o_btree_insert_split(BTreeInsertStackItem *insert_item,
 		btree_register_inprogress_split(right_blkno);
 		if (insert_item->level == 0)
 			pg_atomic_fetch_add_u32(&BTREE_GET_META(desc)->leafPagesNum, 1);
-		END_CRIT_SECTION();
 
 		moveToRightCount = 0;
 
@@ -691,7 +690,12 @@ o_btree_insert_split(BTreeInsertStackItem *insert_item,
 		curContext->index--;
 		insert_item->refind = true;
 		next = false;
+		o_btree_insert_mark_split_finished_if_needed(insert_item);
+		END_CRIT_SECTION();
+		insert_item->rightBlkno = right_blkno;
+
 	}
+
 
 	if (STOPEVENT_CONDITION(STOPEVENT_SPLIT_FAIL, params))
 		elog(ERROR, "Debug condition: page has been splitted.");
@@ -972,7 +976,6 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 			{
 				START_CRIT_SECTION();
 				perform_page_compaction(desc, blkno, &newItems, needsUndo, csn);
-				o_btree_insert_mark_split_finished_if_needed(insert_item);
 				MARK_DIRTY(desc->ppool, blkno);
 
 				if (waitersWakeupCount > 0)
@@ -981,6 +984,7 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 											   waitersWakeupCount);
 
 				unlock_page(blkno);
+				o_btree_insert_mark_split_finished_if_needed(insert_item);
 				END_CRIT_SECTION();
 				next = true;
 			}
@@ -1126,14 +1130,14 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 				BTREE_PAGE_SET_ITEM_FLAGS(p, &loc, insert_item->tuple.formatFlags);
 			}
 
-			o_btree_insert_mark_split_finished_if_needed(insert_item);
-
 			if (fit != BTreeItemPageFitCompactRequired)
 				page_split_chunk_if_needed(desc, p, &loc);
 
 			MARK_DIRTY(desc->ppool, blkno);
-			END_CRIT_SECTION();
 			unlock_page(blkno);
+
+			o_btree_insert_mark_split_finished_if_needed(insert_item);
+			END_CRIT_SECTION();
 
 			next = true;
 		}

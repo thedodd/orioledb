@@ -665,99 +665,15 @@ wakeup_waiters_with_tuples(OInMemoryBlkno blkno,
 				wakeupTail = PAGE_STATE_INVALID_PROCNO,
 				prevTail = PAGE_STATE_INVALID_PROCNO,
 				prevTailReplace = PAGE_STATE_INVALID_PROCNO;
+	int			count1 = 0,
+				count2 = 0,
+				count3 = 0;
 
 	Assert(count > 0);
 
 	for (i = 0; i < count; i++)
 		lockerStates[procnums[i]].inserted = true;
 
-	state = pg_atomic_read_u32(&header->state);
-	while (true)
-	{
-		uint32		newState;
-
-		newTail = tail = pgprocnum = state & PAGE_STATE_LIST_TAIL_MASK;
-
-		prevPgprocnum = PAGE_STATE_INVALID_PROCNO;
-		while (pgprocnum != prevTail)
-		{
-			LockerShmemState *lockerState = &lockerStates[pgprocnum];
-
-			if (lockerState->inserted)
-			{
-				uint32	next = lockerState->next;
-
-				/* Remove from the waiters list */
-				if (prevPgprocnum == PAGE_STATE_INVALID_PROCNO)
-					newTail = next;
-				else
-				{
-					Assert(prevPgprocnum != next);
-					lockerStates[prevPgprocnum].next = next;
-				}
-
-				/* Push to the wakeup list */
-				lockerState->next = wakeupTail;
-				wakeupTail = pgprocnum;
-
-				pgprocnum = next;
-			}
-			else
-			{
-				prevPgprocnum = pgprocnum;
-				pgprocnum = lockerState->next;
-			}
-		}
-
-		/*
-		 * Redo the previous replacement of tail if needed.
-		 */
-		if (prevTail != prevTailReplace)
-		{
-			Assert(prevTail != PAGE_STATE_INVALID_PROCNO);
-
-			if (prevPgprocnum == PAGE_STATE_INVALID_PROCNO)
-				newTail = prevTailReplace;
-			else
-			{
-				Assert(prevPgprocnum != prevTailReplace);
-				lockerStates[prevPgprocnum].next = prevTailReplace;
-			}
-		}
-
-		newState = state & (~PAGE_STATE_LIST_TAIL_MASK);
-		newState |= newTail;
-
-		if (newTail != tail)
-		{
-			if (pg_atomic_compare_exchange_u32(&header->state, &state, newState))
-				break;
-		}
-		else
-		{
-			break;
-		}
-
-		prevTail = tail;
-		prevTailReplace = newTail;
-	}
-
-	pgprocnum = wakeupTail;
-	while (pgprocnum != PAGE_STATE_INVALID_PROCNO)
-	{
-		LockerShmemState *lockerState = &lockerStates[pgprocnum];
-		PGPROC	   *waiter = GetPGProcByNumber(pgprocnum);
-		uint32		next = lockerState->next;
-
-		pg_read_barrier();
-
-		lockerState->pageWaiting = false;
-
-		pg_write_barrier();
-
-		PGSemaphoreUnlock(waiter->sem);
-		pgprocnum = next;
-	}
 }
 
 #ifdef UNUSED
@@ -952,6 +868,10 @@ unlock_page_internal(OInMemoryBlkno blkno, bool split)
 				exclusive = PAGE_STATE_INVALID_PROCNO,
 				exclusivePrev;
 	bool		wokeup_exclusive = false;
+	int			count1 = 0,
+				count2 = 0,
+				count3 = 0,
+				count4 = 0;
 
 	unlock_check_page(blkno);
 
@@ -967,7 +887,8 @@ unlock_page_internal(OInMemoryBlkno blkno, bool split)
 		{
 			LockerShmemState *lockerState = &lockerStates[pgprocnum];
 
-			if (!lockerState->waitExclusive ||
+			if (lockerState->inserted ||
+				!lockerState->waitExclusive ||
 				(split && BlockNumberIsValid(lockerState->blkno)))
 			{
 				uint32	next = lockerState->next;
@@ -985,6 +906,12 @@ unlock_page_internal(OInMemoryBlkno blkno, bool split)
 				Assert(pgprocnum != wakeupTail);
 				lockerState->next = wakeupTail;
 				wakeupTail = pgprocnum;
+				if (lockerState->inserted)
+					count1++;
+				else if (BlockNumberIsValid(lockerState->blkno))
+					count2++;
+				else
+					count3++;
 
 				pgprocnum = next;
 			}
@@ -996,6 +923,7 @@ unlock_page_internal(OInMemoryBlkno blkno, bool split)
 					exclusivePrev = prevPgprocnum;
 				}
 
+				count4++;
 				prevPgprocnum = pgprocnum;
 				pgprocnum = lockerState->next;
 			}
@@ -1051,6 +979,8 @@ unlock_page_internal(OInMemoryBlkno blkno, bool split)
 	}
 
 	my_locked_page_del(blkno);
+
+//	elog(LOG, "unlock %u %d %d %d %d", blkno, count1, count2, count3, count4);
 
 	pgprocnum = wakeupTail;
 	while (pgprocnum != PAGE_STATE_INVALID_PROCNO)
