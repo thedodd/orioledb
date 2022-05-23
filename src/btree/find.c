@@ -190,10 +190,10 @@ find_page(OBTreeFindPageContext *context, void *key, BTreeKeyType keyType,
 				}
 				else
 				{
+					p = O_GET_IN_MEMORY_PAGE(intCxt.blkno);
 					intCxt.pagePtr = p;
 					intCxt.haveLock = true;
 					needLock = false;
-					p = O_GET_IN_MEMORY_PAGE(intCxt.blkno);
 				}
 			}
 			else
@@ -714,7 +714,6 @@ refind_page(OBTreeFindPageContext *context, void *key, BTreeKeyType keyType,
 	BTreePageItemLocator loc;
 	char	   *img = context->img;
 	bool		item_found = true;
-	Pointer		p;
 
 	intCxt.context = context;
 	intCxt.key = key;
@@ -727,9 +726,10 @@ refind_page(OBTreeFindPageContext *context, void *key, BTreeKeyType keyType,
 
 retry:
 
-	p = O_GET_IN_MEMORY_PAGE(intCxt.blkno);
 	if (BTREE_PAGE_FIND_IS(context, MODIFY))
 	{
+		Pointer		p;
+
 		if (!O_TUPLE_IS_NULL(context->insertTuple))
 		{
 			bool	upwards = false;
@@ -751,6 +751,7 @@ retry:
 		{
 			lock_page(intCxt.blkno);
 		}
+		p = O_GET_IN_MEMORY_PAGE(intCxt.blkno);
 		intCxt.haveLock = true;
 		intCxt.pagePtr = p;
 		if (PAGE_GET_LEVEL(p) != level ||

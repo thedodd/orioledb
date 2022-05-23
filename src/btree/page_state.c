@@ -102,6 +102,8 @@ my_locked_page_add(OInMemoryBlkno blkno, uint32 state)
 {
 	Assert(get_my_locked_page_index(blkno) < 0);
 	Assert(numberOfMyLockedPages < MAX_PAGES_PER_PROCESS);
+
+	Assert(pg_atomic_read_u32(&((OrioleDBPageHeader *) O_GET_IN_MEMORY_PAGE(blkno))->state) & PAGE_STATE_LOCKED_FLAG);
 	myLockedPages[numberOfMyLockedPages].blkno = blkno;
 	myLockedPages[numberOfMyLockedPages++].state = state;
 }
