@@ -164,6 +164,9 @@ find_page(OBTreeFindPageContext *context, void *key, BTreeKeyType keyType,
 			{
 				if (!try_lock_page(intCxt.blkno))
 					return false;
+				intCxt.pagePtr = p;
+				intCxt.haveLock = true;
+				needLock = false;
 			}
 			else if (!O_TUPLE_IS_NULL(context->insertTuple))
 			{
