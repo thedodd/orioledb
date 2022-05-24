@@ -893,7 +893,7 @@ unlock_page_internal(OInMemoryBlkno blkno, bool split)
 			{
 				uint32	next = lockerState->next;
 
-				if (split && BlockNumberIsValid(lockerState->blkno))
+				if (!lockerState->inserted && split && BlockNumberIsValid(lockerState->blkno))
 					lockerState->split = true;
 
 				/* Remove from the waiters list */

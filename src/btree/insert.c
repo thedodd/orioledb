@@ -929,7 +929,7 @@ o_btree_insert_item(BTreeInsertStackItem *insert_item, int reserve_kind)
 
 			offset = BTREE_PAGE_LOCATOR_GET_OFFSET(p, &loc);
 
-			needsCompaction = (insertSize + MAXALIGN(insertCount * sizeof(LocationIndex)) > BTREE_PAGE_FREE_SPACE(p));
+			needsCompaction = false;
 			needsUndo = needsCompaction && o_btree_insert_needs_page_undo(desc, p);
 
 			/* Get CSN for undo item if needed */
