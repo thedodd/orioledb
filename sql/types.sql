@@ -258,12 +258,18 @@ ALTER TABLE o_test_record_type_alter
 ALTER TYPE record_type_non_altered RENAME TO record_type_renamed;
 ALTER TYPE record_type_non_altered DROP ATTRIBUTE b;
 ALTER TYPE record_type_non_altered ADD ATTRIBUTE c int;
+ALTER TYPE record_type_non_altered ALTER ATTRIBUTE b TYPE text;
 
 ALTER TYPE record_type_altered RENAME TO record_type_renamed;
-CREATE INDEX o_test_record_type_alter_idx2 ON o_test_record_type_alter (val5);
 ALTER TYPE record_type_renamed ADD ATTRIBUTE c int;
+ALTER TYPE record_type_renamed DROP ATTRIBUTE b;
+ALTER TYPE record_type_renamed ALTER ATTRIBUTE c TYPE text;
 
-SELECT * FROM o_test_record_type_alter WHERE val5 = (1, 5);
+SELECT * FROM o_test_record_type_alter;
+UPDATE o_test_record_type_alter SET val5.b = 4;
+UPDATE o_test_record_type_alter t SET val5.c = (t.key).a * 2;
+SELECT * FROM o_test_record_type_alter;
+SELECT * FROM o_test_record_type_alter WHERE (val5).c % 6 = 0;
 SELECT * FROM o_test_record_type_alter WHERE val4 = 'abc';
 SELECT orioledb_tbl_structure('o_test_record_type_alter'::regclass, 'ne');
 

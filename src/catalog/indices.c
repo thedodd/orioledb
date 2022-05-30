@@ -511,7 +511,7 @@ o_index_create(Relation rel,
 	o_table->indices[ix_num].oids.reloid = address.objectId;
 
 	o_opclass_add_all(o_table);
-	custom_types_add_all(o_table);
+	custom_types_add_all(o_table, &o_table->indices[ix_num]);
 
 	/* update o_table */
 	if (old_o_table)

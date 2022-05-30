@@ -99,6 +99,7 @@ typedef struct OTypeCache
 {
 	int			sys_tree_num;
 	bool		is_toast;
+	bool		update_if_exist;
 	Oid			classoid;
 	MemoryContext mcxt;			/* context where stored entries from fast
 								 * cache */
@@ -114,7 +115,7 @@ typedef struct OTypeCache
 extern void o_typecaches_init(void);
 
 extern OTypeCache *o_create_type_cache(int sys_tree_num, bool is_toast,
-									   Oid classoid,
+									   bool update_if_exist, Oid classoid,
 									   HTAB *fast_cache, MemoryContext mcxt,
 									   OTypeCacheFuncs *funcs);
 extern Pointer o_type_cache_search(OTypeCache *type_cache, Oid datoid,
@@ -128,7 +129,7 @@ extern bool o_type_cache_delete(OTypeCache *type_cache, Oid datoid, Oid oid);
 
 extern void o_type_cache_delete_by_lsn(OTypeCache *type_cache, XLogRecPtr lsn);
 
-extern void custom_types_add_all(OTable *o_table);
+extern void custom_types_add_all(OTable *o_table, OTableIndex *o_table_index);
 extern void custom_type_add_if_needed(Oid datoid, Oid typoid,
 									  XLogRecPtr insert_lsn);
 

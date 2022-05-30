@@ -54,7 +54,7 @@ static OTypeCacheFuncs range_cache_funcs =
 O_TYPE_CACHE_INIT_FUNC(range_cache)
 {
 	range_cache = o_create_type_cache(SYS_TREES_RANGE_CACHE,
-									  false,
+									  false, true,
 									  TypeRelationId,
 									  fastcache,
 									  mcxt,

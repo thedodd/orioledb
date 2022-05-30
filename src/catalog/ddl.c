@@ -36,6 +36,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_depend.h"
+#include "catalog/pg_enum.h"
 #include "catalog/pg_type.h"
 #include "catalog/toasting.h"
 #include "commands/defrem.h"
@@ -733,7 +734,6 @@ validate_at_utility(PlannedStmt *pstmt,
 		if (tupdesc_changed)
 		{
 			o_opclass_add_all(o_table);
-			custom_types_add_all(o_table);
 			o_indices_update(o_table, PrimaryIndexNumber, oxid, csn);
 			if (o_table->has_primary)
 				o_invalidate_oids(o_table->indices[PrimaryIndexNumber].oids);
@@ -1262,96 +1262,6 @@ orioledb_utility_command(PlannedStmt *pstmt,
 									context, params, env,
 									dest, qc);
 	}
-
-	/* Update type caches from catalogs after CommandCounterIncrement() */
-	if (IsA(pstmt->utilityStmt, AlterTableStmt))
-	{
-		AlterTableStmt *top_atstmt = (AlterTableStmt *) pstmt->utilityStmt;
-		Relation	rel;
-		Oid			relid;
-		LOCKMODE	lockmode;
-
-		/*
-		 * Figure out lock mode, and acquire lock.  This also does basic
-		 * permissions checks, so that we won't wait for a lock on (for
-		 * example) a relation on which we have no permissions.
-		 */
-		lockmode = AlterTableGetLockLevel(top_atstmt->cmds);
-		relid = AlterTableLookupRelation(top_atstmt, lockmode);
-
-		if (OidIsValid(relid))
-		{
-			Node	   *stmt;
-			List	   *beforeStmts;
-			List	   *afterStmts;
-			List	   *querytree_list = NIL;
-			ListCell   *l;
-
-			/* Run parse analysis for ALTER TABLE */
-			stmt = (Node *) transformAlterTableStmt(relid, top_atstmt,
-													queryString,
-													&beforeStmts,
-													&afterStmts);
-
-			querytree_list = list_concat(querytree_list, beforeStmts);
-			querytree_list = lappend(querytree_list, stmt);
-			querytree_list = list_concat(querytree_list, afterStmts);
-
-			/* Loop trough the parse analysis results */
-			foreach(l, querytree_list)
-			{
-				stmt = (Node *) lfirst(l);
-
-				if (IsA(stmt, AlterTableStmt))
-				{
-					AlterTableStmt *atstmt = (AlterTableStmt *) stmt;
-					Oid			myrelid;
-
-					if (atstmt->objtype == OBJECT_TYPE)
-					{
-						myrelid = AlterTableLookupRelation(atstmt, AccessShareLock);
-
-						if (OidIsValid(myrelid))
-						{
-							rel = relation_open(myrelid, NoLock);
-
-							if (rel->rd_rel->relkind == RELKIND_COMPOSITE_TYPE)
-							{
-								Oid			reltype = rel->rd_rel->reltype;
-
-								relation_close(rel, NoLock);
-								o_record_cache_update_if_needed(MyDatabaseId,
-																reltype, NULL);
-							}
-							else
-							{
-								relation_close(rel, NoLock);
-							}
-
-							UnlockRelationOid(myrelid, AccessShareLock);
-						}
-					}
-				}
-			}
-		}
-		else
-		{
-			ereport(NOTICE,
-					(errmsg("relation \"%s\" does not exist, skipping",
-							top_atstmt->relation->relname)));
-		}
-	}
-	else if (IsA(pstmt->utilityStmt, AlterEnumStmt))
-	{
-		AlterEnumStmt *enum_stmt = (AlterEnumStmt *) pstmt->utilityStmt;
-		Oid			enum_type_oid;
-		TypeName   *typename;
-
-		typename = makeTypeNameFromNameList(enum_stmt->typeName);
-		enum_type_oid = typenameTypeId(NULL, typename);
-
-		o_enum_cache_update_if_needed(MyDatabaseId, enum_type_oid, NULL);
-	}
 }
 
 static void
@@ -1475,9 +1385,6 @@ orioledb_object_access_hook(ObjectAccessType access, Oid classId, Oid objectId,
 	{
 		ObjectAccessDrop *drop_arg = (ObjectAccessDrop *) arg;
 
-		if (subId != 0)
-			return;
-
 #ifdef USE_ASSERT_CHECKING
 		{
 			LOCKTAG		locktag;
@@ -1495,8 +1402,8 @@ orioledb_object_access_hook(ObjectAccessType access, Oid classId, Oid objectId,
 		{
 			bool		is_open = true;
 
-			if (rel->rd_rel->relkind == RELKIND_RELATION
-				&& is_orioledb_rel(rel))
+			if (rel->rd_rel->relkind == RELKIND_RELATION &&
+				(subId == 0) && is_orioledb_rel(rel))
 			{
 				CommitSeqNo csn;
 				OXid		oxid;
@@ -1551,6 +1458,13 @@ orioledb_object_access_hook(ObjectAccessType access, Oid classId, Oid objectId,
 					}
 				}
 				relation_close(tbl, AccessShareLock);
+			}
+			else if (rel->rd_rel->relkind == RELKIND_COMPOSITE_TYPE &&
+					 (subId != 0))
+			{
+				o_find_composite_type_dependencies(rel->rd_rel->reltype, rel);
+				CommandCounterIncrement();
+				o_record_cache_update_if_needed(MyDatabaseId, objectId, NULL);
 			}
 			if (is_open)
 				relation_close(rel, AccessShareLock);
@@ -1613,8 +1527,11 @@ orioledb_object_access_hook(ObjectAccessType access, Oid classId, Oid objectId,
 		if (rel != NULL)
 		{
 			if (rel->rd_rel->relkind == RELKIND_COMPOSITE_TYPE)
-				o_find_composite_type_dependencies(rel->rd_rel->reltype,
-												   rel);
+			{
+				o_find_composite_type_dependencies(rel->rd_rel->reltype, rel);
+				CommandCounterIncrement();
+				o_record_cache_update_if_needed(MyDatabaseId, objectId, NULL);
+			}
 			relation_close(rel, AccessShareLock);
 		}
 	}
@@ -1625,10 +1542,42 @@ orioledb_object_access_hook(ObjectAccessType access, Oid classId, Oid objectId,
 		if (rel != NULL)
 		{
 			if (rel->rd_rel->relkind == RELKIND_COMPOSITE_TYPE)
-				o_find_composite_type_dependencies(rel->rd_rel->reltype,
-												   rel);
+			{
+				o_find_composite_type_dependencies(rel->rd_rel->reltype, rel);
+				CommandCounterIncrement();
+				o_record_cache_update_if_needed(MyDatabaseId, objectId, NULL);
+			}
 			relation_close(rel, AccessShareLock);
 		}
+	}
+	else if (access == OAT_POST_ALTER && classId == TypeRelationId)
+	{
+		HeapTuple		typeTuple;
+		Form_pg_type	tform;
+
+		typeTuple = typeidType(objectId);
+
+		tform = (Form_pg_type) GETSTRUCT(typeTuple);
+
+		switch (tform->typtype)
+		{
+		case TYPTYPE_ENUM:
+			CommandCounterIncrement();
+			o_enum_cache_update_if_needed(MyDatabaseId, objectId, NULL);
+			break;
+
+		case TYPTYPE_COMPOSITE:
+			rel = relation_open(typeidTypeRelid(objectId), AccessShareLock);
+			o_find_composite_type_dependencies(objectId, rel);
+			relation_close(rel, AccessShareLock);
+			CommandCounterIncrement();
+			o_record_cache_update_if_needed(MyDatabaseId, objectId, NULL);
+			break;
+
+		default:
+			break;
+		}
+		ReleaseSysCache(typeTuple);
 	}
 
 	if (old_objectaccess_hook)

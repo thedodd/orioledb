@@ -5,6 +5,7 @@ import re, os
 from .base_test import BaseTest
 from .base_test import ThreadQueryExecutor
 from .base_test import wait_stopevent
+from testgres.exceptions import QueryException
 
 class TypesTest(BaseTest):
 	sys_tree_nums = {}
@@ -210,7 +211,10 @@ class TypesTest(BaseTest):
 				val2 coordinates2,
 				PRIMARY KEY(location)
 			) USING orioledb;
-
+		""")
+		self.check_total_deleted(node, 'RECORD_CACHE', 1, 0)
+		self.check_total_deleted(node, 'TYPE_ELEMENT_CACHE', 1, 0)
+		node.safe_psql('postgres', """
 			ALTER TYPE coordinates2 RENAME TO coordinates_renamed;
 			CREATE TYPE custom_type AS (a int, b float);
 			ALTER TYPE coordinates_renamed ADD ATTRIBUTE z custom_type;
@@ -231,13 +235,24 @@ class TypesTest(BaseTest):
 				PRIMARY KEY(key)
 			) USING orioledb;
 		""")
+		self.check_total_deleted(node, 'RECORD_CACHE', 2, 0)
+		self.check_total_deleted(node, 'TYPE_ELEMENT_CACHE', 1, 0)
 
 		node.safe_psql('postgres', """
-			DROP TABLE o_test_record_type_removed;
-
 			CREATE TYPE custom_type_removed AS (a char, b text);
+		""")
+		with self.assertRaises(QueryException):
+			node.safe_psql('postgres', """
+				ALTER TYPE coordinates_removed
+					ALTER ATTRIBUTE y TYPE custom_type_removed;
+			""")
+		node.safe_psql('postgres', """
+			DROP TABLE o_test_record_type_removed;
 			ALTER TYPE coordinates_removed
 				ALTER ATTRIBUTE y TYPE custom_type_removed;
+		""")
+
+		node.safe_psql('postgres', """
 			CREATE TABLE o_test_record_type_removed2
 			(
 				key coordinates_removed NOT NULL,
@@ -251,17 +266,25 @@ class TypesTest(BaseTest):
 					 )::coordinates_removed
 					FROM generate_series(1, 10) id;
 		""")
+		self.check_total_deleted(node, 'RECORD_CACHE', 3, 0)
+		self.check_total_deleted(node, 'TYPE_ELEMENT_CACHE', 4, 0)
 
+		with self.assertRaises(QueryException):
+			node.safe_psql('postgres', """
+				DROP TYPE custom_type_removed CASCADE;
+			""")
 		node.safe_psql('postgres', """
+			ALTER TABLE o_test_record_type_removed2
+				DROP CONSTRAINT o_test_record_type_removed2_pkey;
 			DROP TYPE custom_type_removed CASCADE;
 		""")
-		self.check_total_deleted(node, 'RECORD_CACHE', 5, 0)
-		self.check_total_deleted(node, 'TYPE_ELEMENT_CACHE', 6, 0)
+		self.check_total_deleted(node, 'RECORD_CACHE', 3, 0)
+		self.check_total_deleted(node, 'TYPE_ELEMENT_CACHE', 4, 0)
 		node.stop(['-m', 'immediate'])
 
 		node.start()
-		self.check_total_deleted(node, 'RECORD_CACHE', 5, 1)
-		self.check_total_deleted(node, 'TYPE_ELEMENT_CACHE', 6, 1)
+		self.check_total_deleted(node, 'RECORD_CACHE', 3, 1)
+		self.check_total_deleted(node, 'TYPE_ELEMENT_CACHE', 4, 1)
 		self.assertEqual(
 			node.execute("SELECT COUNT(*) FROM o_test_record_type;")[0][0],
 			10)

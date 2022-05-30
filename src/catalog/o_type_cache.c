@@ -104,7 +104,7 @@ o_typecaches_init(void)
  * Initializes the enum B-tree memory.
  */
 OTypeCache *
-o_create_type_cache(int sys_tree_num, bool is_toast,
+o_create_type_cache(int sys_tree_num, bool is_toast, bool update_if_exist,
 					Oid classoid, HTAB *fast_cache,
 					MemoryContext mcxt, OTypeCacheFuncs *funcs)
 {
@@ -116,6 +116,7 @@ o_create_type_cache(int sys_tree_num, bool is_toast,
 	type_cache = MemoryContextAllocZero(mcxt, sizeof(OTypeCache));
 	type_cache->sys_tree_num = sys_tree_num;
 	type_cache->is_toast = is_toast;
+	type_cache->update_if_exist = update_if_exist;
 	type_cache->classoid = classoid;
 	type_cache->fast_cache = fast_cache;
 	type_cache->mcxt = mcxt;
@@ -602,6 +603,8 @@ o_type_cache_add_if_needed(OTypeCache *type_cache, Oid datoid,
 	if (entry != NULL)
 	{
 		/* it's already exist in B-tree */
+		if (type_cache->update_if_exist)
+			o_type_cache_update_if_needed(type_cache, datoid, oid, arg);
 		return;
 	}
 
@@ -955,13 +958,21 @@ custom_type_add_if_needed(Oid datoid, Oid typoid, XLogRecPtr insert_lsn)
  * Inserts type elements for all fields of the o_table to the typecache.
  */
 void
-custom_types_add_all(OTable *o_table)
+custom_types_add_all(OTable *o_table, OTableIndex *o_table_index)
 {
 	int			cur_field;
 	XLogRecPtr	cur_lsn = GetXLogWriteRecPtr();
+	int			expr_field = 0;
 
-	for (cur_field = 0; cur_field < o_table->nfields; cur_field++)
-		custom_type_add_if_needed(o_table->oids.datoid,
-								  o_table->fields[cur_field].typid,
-								  cur_lsn);
+	for (cur_field = 0; cur_field < o_table_index->nfields; cur_field++)
+	{
+		int	attnum = o_table_index->fields[cur_field].attnum;
+		Oid	typid;
+
+		if (attnum != EXPR_ATTNUM)
+			typid = o_table->fields[attnum].typid;
+		else
+			typid = o_table_index->exprfields[expr_field++].typid;
+		custom_type_add_if_needed(o_table->oids.datoid, typid, cur_lsn);
+	}
 }

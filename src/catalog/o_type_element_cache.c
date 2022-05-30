@@ -50,7 +50,7 @@ static OTypeCacheFuncs type_element_cache_funcs =
 O_TYPE_CACHE_INIT_FUNC(type_element_cache)
 {
 	type_element_cache = o_create_type_cache(SYS_TREES_TYPE_ELEMENT_CACHE,
-											 false,
+											 false, false,
 											 TypeRelationId,
 											 fastcache,
 											 mcxt,

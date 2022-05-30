@@ -40,8 +40,9 @@ static Pointer o_record_cache_deserialize_entry(MemoryContext mcxt,
 												Size length);
 static void o_record_cache_free_entry(Pointer entry);
 static Oid	o_record_cache_get_link_oid(Pointer entry);
-static void fill_o_record(Pointer *entry_ptr, Oid datoid, Oid typoid,
-						  XLogRecPtr insert_lsn, Pointer arg);
+static void o_record_cache_fill_entry(Pointer *entry_ptr, Oid datoid,
+									  Oid typoid, XLogRecPtr insert_lsn,
+									  Pointer arg);
 
 struct ORecord
 {
@@ -56,7 +57,7 @@ O_TYPE_CACHE_FUNCS(record_cache, ORecord);
 static OTypeCacheFuncs record_cache_funcs =
 {
 	.free_entry = o_record_cache_free_entry,
-	.fill_entry = fill_o_record,
+	.fill_entry = o_record_cache_fill_entry,
 	.toast_serialize_entry = o_record_cache_serialize_entry,
 	.toast_deserialize_entry = o_record_cache_deserialize_entry,
 	.fastcache_get_link_oid = o_record_cache_get_link_oid
@@ -68,7 +69,7 @@ static OTypeCacheFuncs record_cache_funcs =
 O_TYPE_CACHE_INIT_FUNC(record_cache)
 {
 	record_cache = o_create_type_cache(SYS_TREES_RECORD_CACHE,
-									   true,
+									   true, true,
 									   TypeRelationId,
 									   fastcache,
 									   mcxt,
@@ -76,8 +77,8 @@ O_TYPE_CACHE_INIT_FUNC(record_cache)
 }
 
 void
-fill_o_record(Pointer *entry_ptr, Oid datoid, Oid typoid,
-			  XLogRecPtr insert_lsn, Pointer arg)
+o_record_cache_fill_entry(Pointer *entry_ptr, Oid datoid, Oid typoid,
+			  			  XLogRecPtr insert_lsn, Pointer arg)
 {
 	MemoryContext prev_context;
 	TypeCacheEntry *typcache;

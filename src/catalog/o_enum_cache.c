@@ -103,7 +103,7 @@ static OTypeCacheFuncs enumoid_cache_funcs =
 O_TYPE_CACHE_INIT_FUNC(enum_cache)
 {
 	enum_cache = o_create_type_cache(SYS_TREES_ENUM_CACHE,
-									 true,
+									 true, false,
 									 TypeRelationId,
 									 fastcache,
 									 mcxt,
@@ -113,7 +113,7 @@ O_TYPE_CACHE_INIT_FUNC(enum_cache)
 O_TYPE_CACHE_INIT_FUNC(enumoid_cache)
 {
 	enumoid_cache = o_create_type_cache(SYS_TREES_ENUMOID_CACHE,
-										false,
+										false, false,
 										EnumRelationId,
 										fastcache,
 										mcxt,
