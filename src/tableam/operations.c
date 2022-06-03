@@ -975,14 +975,15 @@ o_tbl_indices_insert(TupleTableSlot *slot,
 	OBTreeKeyBound knew;
 	bool		inserted = false;
 	int			i;
-	ExprContext *econtext;
+	ExprContext *econtext = NULL;
 
 	result.success = true;
 
 	i = start_ix;
 	Assert(i < descr->nIndices);
 
-	econtext = GetPerTupleExprContext(estate);
+	if (estate)
+		econtext = GetPerTupleExprContext(estate);
 	while (i < descr->nIndices)
 	{
 		OIndexDescr *id = descr->indices[i];
@@ -991,7 +992,8 @@ o_tbl_indices_insert(TupleTableSlot *slot,
 		bool		unique = descr->indices[i]->unique;
 		bool		add_to_index = true;
 
-		if (!primary && !o_is_index_predicate_satisfied(id, slot, econtext))
+		if (!primary && econtext &&
+			!o_is_index_predicate_satisfied(id, slot, econtext))
 			add_to_index = false;
 
 		if (add_to_index)
