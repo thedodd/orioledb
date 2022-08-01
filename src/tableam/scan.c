@@ -122,9 +122,9 @@ static CustomExecMethods o_scan_exec_methods =
 	o_rescan_custom_scan,
 	NULL,
 	NULL,
-	NULL,
-	NULL,
-	NULL,
+	orioledb_parallelscan_estimate,
+	orioledb_parallelscan_initialize,
+	orioledb_parallelscan_reinitialize,
 	NULL,
 	NULL,
 	o_explain_custom_scan
@@ -159,9 +159,21 @@ transform_path(Path *src_path, OTableDescr *descr)
 	result->path.startup_cost = src_path->startup_cost;
 	result->path.total_cost = src_path->total_cost;
 	result->path.pathkeys = src_path->pathkeys;
-	result->path.parallel_aware = false;
-	result->path.parallel_safe = false;
-	result->path.parallel_workers = 0;
+	result->path.parallel_aware = src_path->parallel_aware;
+	if(src_path->parallel_aware)
+		elog(WARNING, "parallel_aware");
+	result->path.parallel_safe = src_path->parallel_safe;
+	if(src_path->parallel_safe)
+	{
+//		volatile bool a = 1;
+		elog(WARNING, "parallel_safe");
+//		while (a)
+//			pg_usleep(100000L);
+	}
+	result->path.parallel_workers = src_path->parallel_workers;
+	if(src_path->parallel_workers)
+		elog(WARNING, "parallel_workers = %d", src_path->parallel_workers);
+
 	result->methods = &o_path_methods;
 	result->custom_paths = list_make1(src_path);
 
@@ -291,11 +303,6 @@ orioledb_set_rel_pathlist_hook(PlannerInfo *rootPageBlkno, RelOptInfo *rel,
 				}
 			}
 
-			/*
-			 * disable partial scans
-			 */
-			list_free(rel->partial_pathlist);
-			rel->partial_pathlist = NIL;
 		}
 
 		if (relation != NULL)

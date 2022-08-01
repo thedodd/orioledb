@@ -60,6 +60,9 @@ typedef struct OScanDescData
 	BTreeSeqScan *scan;
 	CommitSeqNo csn;
 	ItemPointerData iptr;
+
+	struct ParallelOScanDescData   *os_parallel; /* AM-specific parallel scan information */
+
 } OScanDescData;
 typedef OScanDescData *OScanDesc;
 
@@ -1065,6 +1068,48 @@ orioledb_scan_sample_next_tuple(TableScanDesc scan, SampleScanState *scanstate,
 	return false;
 }
 
+/*
+ * partial (and parallel) scans disabled by orioledb_set_rel_pathlist_hook()
+ */
+Size
+orioledb_parallelscan_estimate(Relation rel)
+{
+	elog(WARNING, ">> orioledb_parallelscan_estimate");
+	Assert(is_orioledb_rel(rel));
+
+	return sizeof(ParallelOScanDescData);
+}
+
+/* Modified copy of table_block_parallelscan_initialize */
+Size
+orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
+{
+	ParallelOScanDesc poscan = (ParallelOScanDesc) pscan;
+
+	poscan->phs_base.phs_relid = RelationGetRelid(rel);
+	poscan->nblocks = RelationGetNumberOfBlocks(rel);
+	poscan->phs_base.phs_syncscan = false; // synchronize_seqscans && !RelationUsesLocalBuffers(rel) && poscan->pos_nblocks > NBuffers / 4;
+	SpinLockInit(&poscan->mutex);
+	poscan->cur_int_page = 0;
+	poscan->int_page[0].is_empty=true;
+	poscan->int_page[1].is_empty=true;
+	poscan->leader_started = false;
+	memset(poscan->worker_active, 0, sizeof(poscan->worker_active));
+
+	elog(WARNING, ">> %s", PG_FUNCNAME_MACRO);
+	Assert(is_orioledb_rel(rel));
+
+	return sizeof(ParallelOScanDescData);
+}
+
+void
+orioledb_parallelscan_reinitialize(Relation rel, ParallelTableScanDesc pscan)
+{
+	Assert(is_orioledb_rel(rel));
+	elog(ERROR, "Not implemented: %s", PG_FUNCNAME_MACRO);
+}
+
+
 static TableScanDesc
 orioledb_beginscan(Relation relation, Snapshot snapshot,
 				   int nkeys, ScanKey key,
@@ -1076,6 +1121,7 @@ orioledb_beginscan(Relation relation, Snapshot snapshot,
 
 	descr = relation_get_descr(relation);
 
+	elog(WARNING, ">> %s", PG_FUNCNAME_MACRO);
 	/*
 	 * allocate and initialize scan descriptor
 	 */
@@ -1105,8 +1151,11 @@ orioledb_beginscan(Relation relation, Snapshot snapshot,
 	ItemPointerSetBlockNumber(&scan->iptr, 0);
 	ItemPointerSetOffsetNumber(&scan->iptr, FirstOffsetNumber);
 
-	o_btree_load_shmem(&GET_PRIMARY(descr)->desc);
-	scan->scan = make_btree_seq_scan(&GET_PRIMARY(descr)->desc, scan->csn);
+	if (descr)
+	{
+		o_btree_load_shmem(&GET_PRIMARY(descr)->desc);
+		scan->scan = make_btree_seq_scan(&GET_PRIMARY(descr)->desc, scan->csn, (ParallelOScanDesc) parallel_scan);
+	}
 
 	return &scan->rs_base;
 }
@@ -1124,9 +1173,11 @@ orioledb_rescan(TableScanDesc sscan, ScanKey key, bool set_params,
 	memcpy(scan->rs_base.rs_key, key, sizeof(ScanKeyData) *
 		   scan->rs_base.rs_nkeys);
 
-	free_btree_seq_scan(scan->scan);
+	if (scan->scan)
+		free_btree_seq_scan(scan->scan);
+
 	o_btree_load_shmem(&GET_PRIMARY(descr)->desc);
-	scan->scan = make_btree_seq_scan(&GET_PRIMARY(descr)->desc, scan->csn);
+	scan->scan = make_btree_seq_scan(&GET_PRIMARY(descr)->desc, scan->csn, NULL);
 }
 
 static void
@@ -1136,7 +1187,8 @@ orioledb_endscan(TableScanDesc sscan)
 
 	STOPEVENT(STOPEVENT_SCAN_END, NULL);
 
-	free_btree_seq_scan(scan->scan);
+	if (scan->scan)
+		free_btree_seq_scan(scan->scan);
 }
 
 static bool
@@ -1206,30 +1258,6 @@ orioledb_getnextslot(TableScanDesc sscan, ScanDirection direction,
 	while (!result);
 
 	return true;
-}
-
-/*
- * partial (and parallel) scans disabled by orioledb_set_rel_pathlist_hook()
- */
-static Size
-orioledb_parallelscan_estimate(Relation rel)
-{
-	elog(ERROR, "Not implemented: %s", PG_FUNCNAME_MACRO);
-	return 0;
-}
-
-static Size
-orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
-{
-	elog(ERROR, "Not implemented: %s", PG_FUNCNAME_MACRO);
-	return 0;
-}
-
-static void
-orioledb_parallelscan_reinitialize(Relation rel,
-								   ParallelTableScanDesc pscan)
-{
-	elog(ERROR, "Not implemented: %s", PG_FUNCNAME_MACRO);
 }
 
 static void
@@ -1641,6 +1669,13 @@ relation_get_descr(Relation rel)
 	rel->rd_amcache = result;
 	if (result)
 		table_descr_inc_refcnt(result);
+//	else
+//	{
+//      volatile bool a = 1;
+//      elog(WARNING, "relation_get_descr");
+//      while (a)
+//            pg_usleep(100000L);
+//	}
 	return result;
 }
 

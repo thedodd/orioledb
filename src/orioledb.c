@@ -1281,13 +1281,25 @@ orioledb_get_relation_info_hook(PlannerInfo *rootPageBlkno,
 								RelOptInfo *rel)
 {
 	Relation	relation;
+	BlockNumber heap_blocks;
+	double      reltuples;
+	double      allvisfrac;
 
 	relation = table_open(relationObjectId, NoLock);
 
 	if (is_orioledb_rel(relation))
 	{
 		/* Evade parallel scan of OrioleDB's tables */
-		rel->rel_parallel_workers = 0;
+//		rel->rel_parallel_workers = 0;
+		rel->rel_parallel_workers = RelationGetParallelWorkers(relation, -1);
+		elog(WARNING,"consider_parallel %d", rel->consider_parallel);
+//		orioledb_estimate_rel_size(relation, NULL, &heap_blocks, &reltuples, &allvisfrac);
+//		rel->rel_parallel_workers = compute_parallel_worker(rel, heap_blocks, -1,
+//															max_parallel_maintenance_workers);
+
+		if(rel->rel_parallel_workers > 0)
+			elog(WARNING, "Rel parallel workers = %d", rel->rel_parallel_workers);
+
 		if (relation->rd_rel->relhasindex)
 		{
 			int			i;

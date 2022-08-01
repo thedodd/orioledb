@@ -27,7 +27,8 @@ typedef struct BTreeSeqScanCallbacks
 	bool		(*getNextKey) (OFixedKey *key, bool inclusive, void *arg);
 } BTreeSeqScanCallbacks;
 
-extern BTreeSeqScan *make_btree_seq_scan(BTreeDescr *desc, CommitSeqNo csn);
+extern BTreeSeqScan *make_btree_seq_scan(BTreeDescr *desc, CommitSeqNo csn,
+										 void *poscan);
 extern BTreeSeqScan *make_btree_seq_scan_cb(BTreeDescr *desc, CommitSeqNo csn,
 											BTreeSeqScanCallbacks *cb,
 											void *arg);
@@ -40,5 +41,6 @@ extern OTuple btree_seq_scan_getnext_raw(BTreeSeqScan *scan, MemoryContext mctx,
 										 bool *end, BTreeLocationHint *hint);
 extern void free_btree_seq_scan(BTreeSeqScan *scan);
 extern void seq_scans_cleanup(void);
+
 
 #endif							/* __BTREE_SCAN_H__ */

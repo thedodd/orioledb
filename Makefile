@@ -66,10 +66,10 @@ OBJS = src/btree/btree.o \
 	   src/utils/ucm.o \
 	   $(WIN32RES)
 
-REGRESSCHECKS = btree_sys_check \
+REGRESSCHECKS = bitmap_scan \
+				btree_sys_check \
 				btree_compression \
 				btree_print \
-				bitmap_scan \
 				collate \
 				ddl \
 				explain \

@@ -135,4 +135,44 @@ extern OTableDescr *relation_get_descr(Relation rel);
 extern void table_descr_inc_refcnt(OTableDescr *descr);
 extern void table_descr_dec_refcnt(OTableDescr *descr);
 
+extern Size orioledb_parallelscan_estimate(Relation rel);
+extern Size orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan);
+extern void orioledb_parallelscan_reinitialize(Relation rel, ParallelTableScanDesc pscan);
+
+/*
+ * Oriole-specific shared state for parallel table scan.
+ *
+ * Each backend participating in a parallel table scan has its own
+ * OScanDesc in backend-private memory, and those objects all contain a
+ * pointer to this structure.  The information here must be sufficient to
+ * properly initialize each new OScanDesc as workers join the scan, and it
+ * must act as a information what to scan for those workers.
+ */
+
+typedef struct BTreeIntPageParallelData
+{
+	BTreePageItemLocator 	intLoc;
+	char        			img[ORIOLEDB_BLCKSZ];
+	bool 					is_empty;
+} BTreeIntPageParallelData;
+
+typedef BTreeIntPageParallelData *BTreeIntPageParallel;
+
+typedef struct ParallelOScanDescData
+{
+	ParallelTableScanDescData 		 phs_base;	/* Shared AM-independent state for parallel table scan */
+
+	BlockNumber						 nblocks; //maybe not needed
+	slock_t                          mutex;          /* for current position on level 1 internal page */
+	int                              cur_int_page;  /* index in array of internal pages level 1 */
+	BTreeIntPageParallelData		 int_page[2];
+	bool 							 leader_started;
+	bool 		 					 worker_active[100]; /* array of started workers for debug usage */
+	// TODO implement shared downlinks storage
+	//int64                                    downlinkIndex;
+	// BTreeSeqScanDiskDownlink         diskDownlinks[FLEXIBLE_ARRAY_MEMBER];
+} ParallelOScanDescData;
+
+typedef ParallelOScanDescData *ParallelOScanDesc;
+
 #endif
