@@ -42,5 +42,4 @@ extern OTuple btree_seq_scan_getnext_raw(BTreeSeqScan *scan, MemoryContext mctx,
 extern void free_btree_seq_scan(BTreeSeqScan *scan);
 extern void seq_scans_cleanup(void);
 
-
 #endif							/* __BTREE_SCAN_H__ */

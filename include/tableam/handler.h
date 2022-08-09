@@ -151,7 +151,7 @@ extern void orioledb_parallelscan_reinitialize(Relation rel, ParallelTableScanDe
 
 typedef struct BTreeIntPageParallelData
 {
-	BTreePageItemLocator 	intLoc;
+	OffsetNumber			offset;
 	char        			img[ORIOLEDB_BLCKSZ];
 	bool 					is_empty;
 } BTreeIntPageParallelData;
