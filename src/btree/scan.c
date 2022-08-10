@@ -225,10 +225,21 @@ get_free_shared_int_page_slot(ParallelOScanDesc poscan)
 	else return 0;
 }
 
-static int
-load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
+static inline int
+get_valid_shared_int_page_slot(ParallelOScanDesc poscan)
 {
-	int		loaded = 0;
+	if(!poscan->int_page[0].is_empty)
+			return 1;
+	else if(!poscan->int_page[1].is_empty)
+			return 2;
+	else return 0;
+}
+
+static bool
+load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan, int *loaded)
+{
+	bool 	has_next = false;
+	int 	valid_slot = 0;
 
 	scan->context.flags &= ~BTREE_PAGE_FIND_DOWNLINK_LOCATION;
 	if (!O_TUPLE_IS_NULL(scan->curHikey.tuple))
@@ -251,7 +262,7 @@ load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 
 		if (poscan)
 		{
-			/* Load parallel data for this internal page to a free slot in
+			/* Try to load parallel data for this internal page to a free slot in
 			 * ParallelOScanDescData
 			 */
 			int free_slot;
@@ -267,20 +278,18 @@ load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 				memcpy(&shared_int_page->img, &scan->context.img, ORIOLEDB_BLCKSZ);
 				shared_int_page->offset = BTREE_PAGE_LOCATOR_GET_OFFSET(scan->context.img,
 											&scan->intLoc);
-				loaded = 1;
-				elog(WARNING, "worker %d loaded #%d int page", scan->worker_number, free_slot);
+				*loaded += 1;
+				elog(WARNING, "worker %d loaded #%d int page to shared state", scan->worker_number, free_slot);
 			}
 			SpinLockRelease(&poscan->mutex);
 
 			/* Try to load second page into shared state */
-			if (loaded == 1 && free_slot == 1)
+			if (*loaded == 1 && free_slot == 1)
 			{
-				elog(WARNING, "worker %d try to load second int page", scan->worker_number);
-				loaded += load_next_internal_page(scan, poscan);
+				elog(WARNING, "worker %d try to load second int page to shared state", scan->worker_number);
+				load_next_internal_page(scan, poscan, loaded);
 			}
 		}
-		else
-			loaded = 1;
 	}
 	else
 	{
@@ -294,8 +303,23 @@ load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 		O_TUPLE_SET_NULL(scan->nextKey.tuple);
 		load_first_historical_page(scan);
 	}
-	elog(WARNING, "worker %d, loaded %d int pages", scan->worker_number, loaded);
-	return loaded;
+	elog(WARNING, "worker %d, loaded %d int pages to shared state", scan->worker_number, *loaded);
+
+	if (poscan)
+	{
+		/* Load next internal page from shared state to the backend */
+		SpinLockAcquire(&poscan->mutex);
+		valid_slot = get_valid_shared_int_page_slot(poscan);
+		if(valid_slot)
+		{
+			memcpy(&scan->context.img, poscan->int_page[valid_slot].img, ORIOLEDB_BLCKSZ);
+			elog(WARNING, "worker %d loaded #%d int page to local memory", scan->worker_number, valid_slot);
+			has_next = true;
+		}
+		SpinLockRelease(&poscan->mutex);
+	}
+
+	return has_next;
 }
 
 static void
@@ -509,8 +533,10 @@ internal_locator_next(BTreeSeqScan *scan, ParallelOScanDesc poscan,
 	else
 		BTREE_PAGE_LOCATOR_NEXT(scan->context.img, intLoc);
 
-	/* NB: validity check remain just in case, as of now the result is not evaluated by
+	/*
+	 * NB: validity check remain just in case, as of now the result is not evaluated by
 	 * callers.
+	 */
 	/* End of internal page */
 	if (!BTREE_PAGE_LOCATOR_IS_VALID(scan->context.img, intLoc))
 	{
@@ -727,7 +753,7 @@ load_next_in_memory_leaf_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 		else
 		{
 			bool		result PG_USED_FOR_ASSERTS_ONLY;
-
+			int 		loaded;
 			if (poscan)
 			{
 				/* Internal page finished */
@@ -737,7 +763,8 @@ load_next_in_memory_leaf_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 			}
 
 			elog(WARNING, "worker %d, load_next_internal_page (2)", scan->worker_number);
-			result = load_next_internal_page(scan, poscan);
+			loaded = 0;
+			result = load_next_internal_page(scan, poscan, &loaded);
 			Assert(result);
 		}
 	}
@@ -793,6 +820,7 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 	bool		checkpointConcurrent;
 	BTreeMetaPage *metaPageBlkno = BTREE_GET_META(desc);
 	int 		i = 0;
+	int 		loaded;
 
 	if(poscan)
 	{
@@ -881,8 +909,8 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 	clear_fixed_key(&scan->prevHikey);
 	clear_fixed_key(&scan->curHikey);
 
-	if (load_next_internal_page(scan, poscan) ||
-			(poscan && ( !poscan->int_page[0].is_empty || !poscan->int_page[1].is_empty)))
+	if (load_next_internal_page(scan, poscan, &loaded))// ||
+//			(poscan && ( !poscan->int_page[0].is_empty || !poscan->int_page[1].is_empty)))
 	{
 		if (!load_next_in_memory_leaf_page(scan, poscan))
 		{
@@ -891,6 +919,7 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 				scan->status = BTreeSeqScanFinished;
 		}
 	}
+	elog(WARNING, "make_btree_seq_scan_internal. %s worker %d, finish scan <<<<", poscan ? "Parallel" : "Single", scan->worker_number);
 	return scan;
 }
 
