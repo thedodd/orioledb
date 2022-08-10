@@ -236,7 +236,7 @@ get_valid_shared_int_page_slot(ParallelOScanDesc poscan)
 }
 
 static bool
-load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan, int *loaded)
+load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan, int *loaded, bool outer)
 {
 	bool 	has_next = false;
 	int 	valid_slot = 0;
@@ -279,17 +279,43 @@ load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan, int *loade
 				shared_int_page->offset = BTREE_PAGE_LOCATOR_GET_OFFSET(scan->context.img,
 											&scan->intLoc);
 				*loaded += 1;
-				elog(WARNING, "worker %d loaded #%d int page to shared state", scan->worker_number, free_slot);
+				//BTREE_PAGE_GET_HIKEY(hikey, scan->context.img);
+				elog(WARNING, "worker %d loaded int page %d to shared slot #%d", scan->worker_number, BTREE_PAGE_GET_RIGHTLINK(scan->context.img) ,free_slot);
 			}
 			SpinLockRelease(&poscan->mutex);
 
 			/* Try to load second page into shared state */
 			if (*loaded == 1 && free_slot == 1)
 			{
-				elog(WARNING, "worker %d try to load second int page to shared state", scan->worker_number);
-				load_next_internal_page(scan, poscan, loaded);
+				elog(WARNING, "worker %d try to load int page to shared slot #2", scan->worker_number);
+				load_next_internal_page(scan, poscan, loaded, false);
+			}
+
+			elog(WARNING, "worker %d, loaded %d int pages to shared state",
+					scan->worker_number, *loaded);
+
+			/* Load next internal page from shared state to the backend */
+			if (outer) /* we load 2 pages into shared state but only one into local backend */
+			{
+				SpinLockAcquire(&poscan->mutex);
+				if (poscan->int_page[poscan->cur_int_page].is_empty)
+					poscan->cur_int_page = (poscan->cur_int_page == 1) ? 0 : 1;
+				if (poscan->int_page[poscan->cur_int_page].is_empty)
+				{
+					elog(WARNING, "worker %d two shared int pages are empty", scan->worker_number);
+					return false;
+				}
+
+				memcpy(&scan->context.img, &poscan->int_page[poscan->cur_int_page].img, ORIOLEDB_BLCKSZ);
+				elog(WARNING, "worker %d loaded int page from shared slot #%d to local memory",
+					scan->worker_number, poscan->cur_int_page + 1);
+				SpinLockRelease(&poscan->mutex);
+
+				has_next = true;
 			}
 		}
+		else
+			has_next = true;
 	}
 	else
 	{
@@ -302,23 +328,8 @@ load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan, int *loade
 		scan->firstNextKey = true;
 		O_TUPLE_SET_NULL(scan->nextKey.tuple);
 		load_first_historical_page(scan);
+		has_next = false;
 	}
-	elog(WARNING, "worker %d, loaded %d int pages to shared state", scan->worker_number, *loaded);
-
-	if (poscan)
-	{
-		/* Load next internal page from shared state to the backend */
-		SpinLockAcquire(&poscan->mutex);
-		valid_slot = get_valid_shared_int_page_slot(poscan);
-		if(valid_slot)
-		{
-			memcpy(&scan->context.img, poscan->int_page[valid_slot].img, ORIOLEDB_BLCKSZ);
-			elog(WARNING, "worker %d loaded #%d int page to local memory", scan->worker_number, valid_slot);
-			has_next = true;
-		}
-		SpinLockRelease(&poscan->mutex);
-	}
-
 	return has_next;
 }
 
@@ -491,11 +502,12 @@ check_in_memory_leaf_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 
 /*
  * Output current item locator from parallel state for usage in local backend as next.
- * Then increase item locator in parallel state to be taken on a next call of internal_locator_next()
+ * Then increase the item locator provided and push the offset into parallel state to be
+ * taken on a next call of internal_locator_next()
  */
 static bool
 internal_locator_next(BTreeSeqScan *scan, ParallelOScanDesc poscan,
-					  BTreePageItemLocator *intLoc)
+					  BTreePageItemLocator *intLoc, bool firstcall)
 {
 	if (poscan)
 	{
@@ -504,33 +516,36 @@ internal_locator_next(BTreeSeqScan *scan, ParallelOScanDesc poscan,
 
 		SpinLockAcquire(&poscan->mutex);
 		parallel_int_page = &poscan->int_page[poscan->cur_int_page];
-		/* Fetch next item locator from parallel state to local backend memory */
 
 		if (parallel_int_page->is_empty)
 			elog(ERROR, "		is_empty from parallel locator"); /* should not be */
 
-		BTREE_PAGE_OFFSET_GET_LOCATOR(scan->context.img, parallel_int_page->offset,
-									  intLoc);
-
-		elog(WARNING, "		worker %d, internal_locator_next (%d,%d)", scan->worker_number, scan->intLoc.chunkOffset, scan->intLoc.itemOffset);
+		/* Fetch next item locator from parallel state */
+		BTREE_PAGE_OFFSET_GET_LOCATOR(scan->context.img, parallel_int_page->offset, intLoc);
 
 		/*
-		 * Increase next item locator in parallel state. It will affect the other
-		 * workers, but the local worker only after the next call of
-		 * internal_locator_next()
+		 * Iterate next item offset in parallel state. It will affect current (output)
+		 * locator at next call of internal_locator_next() in any parallel worker.
 		 */
-	    tmpLoc = scan->intLoc;
+	    tmpLoc = *intLoc;
 		BTREE_PAGE_LOCATOR_NEXT(scan->context.img, &tmpLoc);
-		parallel_int_page->offset = BTREE_PAGE_LOCATOR_GET_OFFSET (scan->context.img, &tmpLoc);
-
 		if (!BTREE_PAGE_LOCATOR_IS_VALID(scan->context.img, &tmpLoc))
 		{
+			/* Mark finished page as empty and switch current internal page in shared state */
 			parallel_int_page->is_empty = true;
+			parallel_int_page->offset = 0;
+			poscan->cur_int_page = (poscan->cur_int_page == 0) ? 1 : 0;
 			elog(WARNING, "		worker %d, end _next_ page", scan->worker_number);
 		}
+		else
+			parallel_int_page->offset = BTREE_PAGE_LOCATOR_GET_OFFSET (scan->context.img, &tmpLoc);
+
+		elog(WARNING, "		worker %d, internal_locator_next. Current (%d), next (%d)", scan->worker_number,
+				BTREE_PAGE_LOCATOR_GET_OFFSET (scan->context.img, intLoc), parallel_int_page->offset);
+
 		SpinLockRelease(&poscan->mutex);
 	}
-	else
+	else if (!firstcall)
 		BTREE_PAGE_LOCATOR_NEXT(scan->context.img, intLoc);
 
 	/*
@@ -540,8 +555,8 @@ internal_locator_next(BTreeSeqScan *scan, ParallelOScanDesc poscan,
 	/* End of internal page */
 	if (!BTREE_PAGE_LOCATOR_IS_VALID(scan->context.img, intLoc))
 	{
-		elog(WARNING, "		worker %d, internal_locator_next (%d,%d) invalid locator from %s",
-			 scan->worker_number, scan->intLoc.chunkOffset, scan->intLoc.itemOffset, poscan ? "parallel" : "end page");
+		elog(WARNING, "		worker %d, internal_locator_next() invalid offset (%d) from %s",
+			 scan->worker_number, BTREE_PAGE_LOCATOR_GET_OFFSET(scan->context.img, intLoc), poscan ? "parallel" : "end page");
 
 		return false;
 	}
@@ -558,8 +573,7 @@ internal_locator_next(BTreeSeqScan *scan, ParallelOScanDesc poscan,
 static bool
 iterate_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 {
-	if (!internal_locator_next(scan, poscan, &scan->intLoc))
-		return false;
+	internal_locator_next(scan, poscan, &scan->intLoc, true);
 
 	while (BTREE_PAGE_LOCATOR_IS_VALID(scan->context.img, &scan->intLoc))
 	{
@@ -595,7 +609,7 @@ iterate_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 				start_tuple = tuple;
 
 			elog(WARNING, "cb");
-			internal_locator_next(scan, poscan, &end_locator);
+			internal_locator_next(scan, poscan, &end_locator, false);
 			if (end_locator.chunkOffset == header->chunksCount - 1)
 			{
 				if (end_locator.itemOffset ==
@@ -666,7 +680,7 @@ iterate_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 					scan->hint.blkno = DOWNLINK_GET_IN_MEMORY_BLKNO(downlink);
 					scan->hint.pageChangeCount = DOWNLINK_GET_IN_MEMORY_CHANGECOUNT(downlink);
 					BTREE_PAGE_LOCATOR_FIRST(scan->leafImg, &scan->leafLoc);
-					internal_locator_next(scan, poscan, &scan->intLoc);
+					internal_locator_next(scan, poscan, &scan->intLoc, false);
 
 					scan->firstNextKey = true;
 					O_TUPLE_SET_NULL(scan->nextKey.tuple);
@@ -697,7 +711,7 @@ iterate_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 				continue;
 			}
 		}
-		internal_locator_next(scan, poscan, &scan->intLoc);
+		internal_locator_next(scan, poscan, &scan->intLoc, false);
 	}
 	return false;
 }
@@ -715,10 +729,10 @@ load_next_in_memory_leaf_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 			 */
 			SpinLockAcquire(&poscan->mutex);
 			Assert(!poscan->int_page[poscan->cur_int_page].is_empty);
-			memcpy(&scan->context.img, &poscan->int_page[poscan->cur_int_page].img, ORIOLEDB_BLCKSZ);
-			BTREE_PAGE_OFFSET_GET_LOCATOR(scan->context.img,
-										  poscan->int_page[poscan->cur_int_page].offset,
-										  &scan->intLoc);
+//			memcpy(&scan->context.img, &poscan->int_page[poscan->cur_int_page].img, ORIOLEDB_BLCKSZ);
+			//BTREE_PAGE_OFFSET_GET_LOCATOR(scan->context.img,
+			//							  poscan->int_page[poscan->cur_int_page].offset,
+			//							  &scan->intLoc);
 			elog(WARNING, "worker %d, load_next_in_memory_leaf_page, cur_int_page = %d", scan->worker_number, poscan->cur_int_page);
 			SpinLockRelease(&poscan->mutex);
 		}
@@ -754,17 +768,17 @@ load_next_in_memory_leaf_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 		{
 			bool		result PG_USED_FOR_ASSERTS_ONLY;
 			int 		loaded;
-			if (poscan)
-			{
-				/* Internal page finished */
-				SpinLockAcquire(&poscan->mutex);
-				poscan->int_page[poscan->cur_int_page].is_empty = true;
-				SpinLockRelease(&poscan->mutex);
-			}
+//			if (poscan)
+//			{
+//				/* Internal page finished */
+//				SpinLockAcquire(&poscan->mutex);
+//				poscan->int_page[poscan->cur_int_page].is_empty = true;
+//				SpinLockRelease(&poscan->mutex);
+//			}
 
 			elog(WARNING, "worker %d, load_next_internal_page (2)", scan->worker_number);
 			loaded = 0;
-			result = load_next_internal_page(scan, poscan, &loaded);
+			result = load_next_internal_page(scan, poscan, &loaded, true);
 			Assert(result);
 		}
 	}
@@ -820,7 +834,7 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 	bool		checkpointConcurrent;
 	BTreeMetaPage *metaPageBlkno = BTREE_GET_META(desc);
 	int 		i = 0;
-	int 		loaded;
+	int 		loaded = 0;
 
 	if(poscan)
 	{
@@ -909,7 +923,7 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 	clear_fixed_key(&scan->prevHikey);
 	clear_fixed_key(&scan->curHikey);
 
-	if (load_next_internal_page(scan, poscan, &loaded))// ||
+	if (load_next_internal_page(scan, poscan, &loaded, true))// ||
 //			(poscan && ( !poscan->int_page[0].is_empty || !poscan->int_page[1].is_empty)))
 	{
 		if (!load_next_in_memory_leaf_page(scan, poscan))
