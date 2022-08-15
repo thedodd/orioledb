@@ -1090,9 +1090,9 @@ orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
 	poscan->nblocks = RelationGetNumberOfBlocks(rel);
 	poscan->phs_base.phs_syncscan = false; // synchronize_seqscans && !RelationUsesLocalBuffers(rel) && poscan->pos_nblocks > NBuffers / 4;
 	SpinLockInit(&poscan->mutex);
-	poscan->cur_int_page = 0;
 	poscan->int_page[0].is_empty=true;
 	poscan->int_page[1].is_empty=true;
+	poscan->offset = 0;
 	poscan->leader_started = false;
 	memset(poscan->worker_active, 0, sizeof(poscan->worker_active));
 

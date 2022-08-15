@@ -151,7 +151,6 @@ extern void orioledb_parallelscan_reinitialize(Relation rel, ParallelTableScanDe
 
 typedef struct BTreeIntPageParallelData
 {
-	OffsetNumber			offset;
 	char        			img[ORIOLEDB_BLCKSZ];
 	bool 					is_empty;
 } BTreeIntPageParallelData;
@@ -164,7 +163,8 @@ typedef struct ParallelOScanDescData
 
 	BlockNumber						 nblocks; //maybe not needed
 	slock_t                          mutex;          /* for current position on level 1 internal page */
-	int                              cur_int_page;  /* index in array of internal pages level 1 */
+	int                              offset;
+	OFixedShmemKey					 prevHikey;		/* low key of current level1 page loaded to shared state */
 	BTreeIntPageParallelData		 int_page[2];
 	bool 							 leader_started;
 	bool 		 					 worker_active[100]; /* array of started workers for debug usage */
