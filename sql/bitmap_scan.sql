@@ -22,8 +22,8 @@ ALTER SEQUENCE bitmap_test_id_seq RESTART WITH 100000;
 -- ANALYZE bitmap_test; -- dumps core
 
 INSERT INTO bitmap_test (i)
-	SELECT pseudo_random(1, v) * 20000 FROM generate_series(1,50000) v;
-ANALYZE bitmap_test;
+	SELECT pseudo_random(1, v) * 20000 FROM generate_series(1,500000) v;
+-- ANALYZE bitmap_test;
 
 -- CREATE INDEX bitmap_test_ix1 ON bitmap_test (i);
 
