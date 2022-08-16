@@ -232,14 +232,27 @@ load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan, int *loade
 	{
 		SpinLockAcquire(&poscan->mutex);
 
-		/* if next is loaded, copy it into current and invalidate */
+		/* If next int page is loaded into shared state, copy it into current and
+		 * invalidate */
 		if (!poscan->int_page[1].is_empty && poscan->int_page[0].is_empty)
 		{
 			OTuple prevHikey;
 
-			/* Save previous Hikey of int_page[0] in shared state before it is rewritten by int_page[1] */
-			BTREE_PAGE_GET_HIKEY(prevHikey, poscan->int_page[0].img);
-			copy_fixed_shmem_key(scan->desc, &poscan->prevHikey, prevHikey);
+			/* Save previous Hikey of int_page[0] in shared state before it is
+			 * rewritten by int_page[1]
+			 * */
+			if (!O_PAGE_IS(poscan->int_page[0].img, RIGHTMOST))
+			{
+				BTREE_PAGE_GET_HIKEY(prevHikey, poscan->int_page[0].img);
+				copy_fixed_shmem_key(scan->desc, &poscan->prevHikey, prevHikey);
+			}
+			else
+			{
+				clear_fixed_key(&poscan->prevHikey);
+				elog(WARNING, "worker %d get RIGHTMOST shared int page slot #0. level %u outer %s",
+						scan->worker_number, PAGE_GET_LEVEL(poscan->int_page[0].img),
+						outer ? "Y" : "N");
+			}
 
 			if (!O_PAGE_IS(poscan->int_page[1].img, RIGHTMOST))
 			{
@@ -358,8 +371,11 @@ load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan, int *loade
 				if (!poscan->int_page[0].is_empty)
 				{
 					memcpy(&scan->context.img, &poscan->int_page[0].img, ORIOLEDB_BLCKSZ);
-					load_or_clear_fixed_hikey(scan, poscan->int_page[0].img); 		 /* restore curHikey from shared state */
-					copy_from_fixed_shmem_key(&scan->prevHikey, &poscan->prevHikey); /* restore prevHikey from shared state */
+					/* restore curHikey from shared state */
+					load_or_clear_fixed_hikey(scan, poscan->int_page[0].img);
+
+					/* restore prevHikey from shared state */
+					copy_from_fixed_shmem_key(&scan->prevHikey, &poscan->prevHikey);
 				}
 				SpinLockRelease(&poscan->mutex);
 
@@ -825,9 +841,6 @@ iterate_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 static bool
 load_next_in_memory_leaf_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 {
-	//elog(WARNING, "worker %d,  level %u page load_next_in_memory_leaf_page START",
-	//		 scan->worker_number, PAGE_GET_LEVEL(scan->context.img));
-
 	while (!iterate_internal_page(scan, poscan))
 	{
 		if (O_TUPLE_IS_NULL(scan->curHikey.tuple))
@@ -849,6 +862,7 @@ load_next_in_memory_leaf_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 			}
 			loaded = 0;
 			result = load_next_internal_page(scan, poscan, &loaded, true);
+
 			Assert(result);
 		}
 	}

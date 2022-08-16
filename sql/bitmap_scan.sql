@@ -31,6 +31,11 @@ SET enable_seqscan = ON;
 SET enable_bitmapscan = OFF;
 SET enable_indexscan = OFF;
 
+SET max_parallel_workers_per_gather = 0;
+
+EXPLAIN (COSTS OFF) SELECT count(*) FROM bitmap_test WHERE i < 100;
+SELECT count(*) FROM bitmap_test WHERE i < 100;
+
 SET max_parallel_workers_per_gather = 5;
 SET min_parallel_table_scan_size = 5;
 SET min_parallel_index_scan_size = 1;
