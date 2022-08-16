@@ -256,7 +256,10 @@ load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan, int *loade
 
 			elog(WARNING, "worker %d gets empty shared info level %u outer %s", scan->worker_number, PAGE_GET_LEVEL(poscan->int_page[0].img), outer ? "Y" : "N");
 		}
-		/* General case: fetch hikey from int_page[0]. Decide if we need to push new int page into shared state (into int_page[1]) */
+		/*
+		 * General case: fetch hikey from int_page[0]. Decide if we need to push new int page into shared
+		 * state (into int_page[1])
+		 */
 		else
 		{
 			OTuple hikey;//debug
@@ -355,6 +358,11 @@ load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan, int *loade
 		load_first_historical_page(scan);
 		has_next = false;
 	}
+	elog(WARNING, "worker %d level %u page, outer %s, load_next_internal_page exit &&&. has_next = %d",
+			scan->worker_number,
+			PAGE_GET_LEVEL(scan->context.img),
+			outer ? "Y" : "N",
+			has_next);
 	return has_next;
 }
 
@@ -401,6 +409,8 @@ switch_to_disk_scan(BTreeSeqScan *scan)
  * Output current item locator from parallel state for usage in local backend as next.
  * Then increase the item locator provided and push the offset into parallel state to be
  * taken on a next call of internal_locator_next()
+ *
+ * This function works as BTREE_PAGE_LOCATOR_NEXT if poscan == NULL && !firstcall
  */
 static bool
 internal_locator_next(BTreeSeqScan *scan, ParallelOScanDesc poscan,
@@ -414,9 +424,11 @@ internal_locator_next(BTreeSeqScan *scan, ParallelOScanDesc poscan,
 		SpinLockAcquire(&poscan->mutex);
 
 		if (poscan->int_page[0].is_empty)
+		{
+			SpinLockRelease(&poscan->mutex);
 			elog(ERROR, "		is_empty from parallel locator"); /* should not be */
-
-		/* Fetch next item locator from parallel state */
+		}
+		/* Fetch next item locator from parallel state for output now */
 		BTREE_PAGE_OFFSET_GET_LOCATOR(scan->context.img, poscan->offset, intLoc);
 
 		/*
@@ -443,6 +455,7 @@ internal_locator_next(BTreeSeqScan *scan, ParallelOScanDesc poscan,
 		SpinLockRelease(&poscan->mutex);
 	}
 	else if (!firstcall)
+		/* non-parallel scan */
 		BTREE_PAGE_LOCATOR_NEXT(scan->context.img, intLoc);
 
 	/*
@@ -484,6 +497,9 @@ scan_make_iterator(BTreeSeqScan *scan, OTuple startKey, ParallelOScanDesc poscan
 
 	BTREE_PAGE_LOCATOR_SET_INVALID(&scan->leafLoc);
 	scan->haveHistImg = false;
+
+	elog(WARNING, "worker %d, level %u --scan_make_iterator",
+		scan->worker_number, PAGE_GET_LEVEL(scan->context.img));
 
 	internal_locator_next(scan, poscan, &scan->intLoc, false);
 //	BTREE_PAGE_LOCATOR_NEXT(scan->context.img, &scan->intLoc);
@@ -548,8 +564,8 @@ check_in_memory_leaf_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 	BTreePageItemLocator next = scan->intLoc;
 	bool		result = false;
 
-	internal_locator_next(scan, poscan, &next, false);
-//	BTREE_PAGE_LOCATOR_NEXT(scan->context.img, &next);
+	//internal_locator_next(scan, poscan, &next, false);
+	BTREE_PAGE_LOCATOR_NEXT(scan->context.img, &next);
 	if (BTREE_PAGE_LOCATOR_IS_VALID(scan->context.img, &next))
 		BTREE_PAGE_READ_INTERNAL_TUPLE(nextKey, scan->context.img, &next);
 	else if (!O_PAGE_IS(scan->context.img, RIGHTMOST))
@@ -601,8 +617,6 @@ check_in_memory_leaf_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 static bool
 iterate_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 {
-	internal_locator_next(scan, poscan, &scan->intLoc, true);
-
 	while (BTREE_PAGE_LOCATOR_IS_VALID(scan->context.img, &scan->intLoc))
 	{
 		BTreeNonLeafTuphdr *tuphdr;
@@ -708,6 +722,8 @@ iterate_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 					scan->hint.blkno = DOWNLINK_GET_IN_MEMORY_BLKNO(downlink);
 					scan->hint.pageChangeCount = DOWNLINK_GET_IN_MEMORY_CHANGECOUNT(downlink);
 					BTREE_PAGE_LOCATOR_FIRST(scan->leafImg, &scan->leafLoc);
+					elog(WARNING, "worker %d,  level %u page iterate_internal_page exit ---", scan->worker_number,
+							PAGE_GET_LEVEL(scan->context.img));
 					internal_locator_next(scan, poscan, &scan->intLoc, false);
 
 					scan->firstNextKey = true;
@@ -740,6 +756,8 @@ iterate_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 			}
 		}
 		internal_locator_next(scan, poscan, &scan->intLoc, false);
+		elog(WARNING, "worker %d,  level %u page iterate_internal_page loop +++",
+				scan->worker_number, PAGE_GET_LEVEL(scan->context.img));
 	}
 	elog(WARNING, "worker %d,  level %u page iterate_internal_page exit with: false",
 			scan->worker_number, PAGE_GET_LEVEL(scan->context.img));
@@ -749,10 +767,15 @@ iterate_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 static bool
 load_next_in_memory_leaf_page(BTreeSeqScan *scan, ParallelOScanDesc poscan)
 {
+	//elog(WARNING, "worker %d,  level %u page load_next_in_memory_leaf_page START",
+	//		 scan->worker_number, PAGE_GET_LEVEL(scan->context.img));
+
 	while (!iterate_internal_page(scan, poscan))
 	{
 		if (O_TUPLE_IS_NULL(scan->curHikey.tuple))
 		{
+			elog(WARNING, "worker %d,  level %u page load_next_in_memory_leaf_page curHikey NULL ^^^",
+					scan->worker_number, PAGE_GET_LEVEL(scan->context.img));
 			return false;
 		}
 		else
@@ -829,7 +852,7 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 	if(poscan)
 	{
 
-		SpinLockAcquire(&poscan->mutex);
+		SpinLockAcquire(&poscan->worker_mutex);
 		for (scan->worker_number = 0; poscan->worker_active[scan->worker_number] == true; scan->worker_number++) {}
 
 //		elog(WARNING, "make_btree_seq_scan_internal, scan=%x, poscan=%x, i = %d", scan, poscan, i);
@@ -844,7 +867,7 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 			scan->is_leader = true;
 		}
 
-		SpinLockRelease(&poscan->mutex);
+		SpinLockRelease(&poscan->worker_mutex);
 	}
 
 	elog(WARNING, "make_btree_seq_scan_internal. %s worker %d, is_leader = %s", poscan ? "Parallel" : "Single", scan->worker_number, scan->is_leader ? "Y" : "N");
@@ -918,6 +941,8 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 		elog(WARNING, "(1) make_btree_seq_scan_internal . %s worker %d, finish scan <<<<", poscan ? "Parallel" : "Single", scan->worker_number);
 		return scan;
 	}
+
+	internal_locator_next(scan, poscan, &scan->intLoc, true);
 
 	if (load_next_in_memory_leaf_page(scan, poscan))
 	{
@@ -1108,7 +1133,7 @@ apply_next_key(BTreeSeqScan *scan)
 
 static OTuple
 btree_seq_scan_getnext_internal(BTreeSeqScan *scan, MemoryContext mctx,
-								CommitSeqNo *tupleCsn, BTreeLocationHint *hint)
+								CommitSeqNo *tupleCsn, BTreeLocationHint *hint, void *poscan)
 {
 	OTuple		tuple;
 
@@ -1230,7 +1255,8 @@ btree_seq_scan_getnext_internal(BTreeSeqScan *scan, MemoryContext mctx,
 		{
 			if (scan->status == BTreeSeqScanInMemory)
 			{
-				if (load_next_in_memory_leaf_page(scan, NULL))
+				//elog(WARNING, "==btree_seq_scan_getnext_internal");
+				if (load_next_in_memory_leaf_page(scan, (ParallelOScanDesc) poscan))
 				{
 					if (scan->iter)
 					{
@@ -1282,14 +1308,14 @@ btree_seq_scan_getnext_internal(BTreeSeqScan *scan, MemoryContext mctx,
 
 OTuple
 btree_seq_scan_getnext(BTreeSeqScan *scan, MemoryContext mctx,
-					   CommitSeqNo *tupleCsn, BTreeLocationHint *hint)
+					   CommitSeqNo *tupleCsn, BTreeLocationHint *hint, void *poscan)
 {
 	OTuple		tuple;
 
 	if (scan->status == BTreeSeqScanInMemory ||
 		scan->status == BTreeSeqScanDisk)
 	{
-		tuple = btree_seq_scan_getnext_internal(scan, mctx, tupleCsn, hint);
+		tuple = btree_seq_scan_getnext_internal(scan, mctx, tupleCsn, hint, poscan);
 
 		if (!O_TUPLE_IS_NULL(tuple))
 			return tuple;
@@ -1324,7 +1350,7 @@ btree_seq_scan_get_tuple_from_iterator_raw(BTreeSeqScan *scan,
 
 static OTuple
 btree_seq_scan_getnext_raw_internal(BTreeSeqScan *scan, MemoryContext mctx,
-									BTreeLocationHint *hint)
+									BTreeLocationHint *hint, void *poscan)
 {
 	BTreeLeafTuphdr *tupHdr;
 	OTuple		tuple;
@@ -1342,7 +1368,7 @@ btree_seq_scan_getnext_raw_internal(BTreeSeqScan *scan, MemoryContext mctx,
 	{
 		if (scan->status == BTreeSeqScanInMemory)
 		{
-			if (load_next_in_memory_leaf_page(scan, NULL))
+			if (load_next_in_memory_leaf_page(scan, (ParallelOScanDesc) poscan))
 			{
 				if (scan->iter)
 				{
@@ -1388,14 +1414,14 @@ btree_seq_scan_getnext_raw_internal(BTreeSeqScan *scan, MemoryContext mctx,
 
 OTuple
 btree_seq_scan_getnext_raw(BTreeSeqScan *scan, MemoryContext mctx,
-						   bool *end, BTreeLocationHint *hint)
+						   bool *end, BTreeLocationHint *hint, void *poscan)
 {
 	OTuple		tuple;
 
 	if (scan->status == BTreeSeqScanInMemory ||
 		scan->status == BTreeSeqScanDisk)
 	{
-		tuple = btree_seq_scan_getnext_raw_internal(scan, mctx, hint);
+		tuple = btree_seq_scan_getnext_raw_internal(scan, mctx, hint, poscan);
 		if (scan->status == BTreeSeqScanInMemory ||
 			scan->status == BTreeSeqScanDisk)
 		{

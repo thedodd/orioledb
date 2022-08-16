@@ -386,7 +386,7 @@ o_exec_bitmap_fetch(OBitmapScan *scan, CustomScanState *node)
 		CommitSeqNo tupleCsn;
 
 		tuple = btree_seq_scan_getnext(scan->seq_scan, tupleCxt, &tupleCsn,
-									   &hint);
+									   &hint, NULL);
 
 		if (O_TUPLE_IS_NULL(tuple))
 		{

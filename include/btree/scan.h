@@ -36,9 +36,11 @@ extern BTreeSeqScan *make_btree_sampling_scan(BTreeDescr *desc,
 											  BlockSampler sampler);
 extern OTuple btree_seq_scan_getnext(BTreeSeqScan *scan, MemoryContext mctx,
 									 CommitSeqNo *tupleCsn,
-									 BTreeLocationHint *hint);
+									 BTreeLocationHint *hint,
+									 void *poscan);
 extern OTuple btree_seq_scan_getnext_raw(BTreeSeqScan *scan, MemoryContext mctx,
-										 bool *end, BTreeLocationHint *hint);
+										 bool *end, BTreeLocationHint *hint,
+										 void *poscan);
 extern void free_btree_seq_scan(BTreeSeqScan *scan);
 extern void seq_scans_cleanup(void);
 

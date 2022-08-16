@@ -163,6 +163,7 @@ typedef struct ParallelOScanDescData
 
 	BlockNumber						 nblocks; //maybe not needed
 	slock_t                          mutex;          /* for current position on level 1 internal page */
+	slock_t 						 worker_mutex;    /* for sequential workers joining */
 	int                              offset;
 	OFixedShmemKey					 prevHikey;		/* low key of current level1 page loaded to shared state */
 	BTreeIntPageParallelData		 int_page[2];

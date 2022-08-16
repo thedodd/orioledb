@@ -61,7 +61,7 @@ typedef struct OScanDescData
 	CommitSeqNo csn;
 	ItemPointerData iptr;
 
-	struct ParallelOScanDescData   *os_parallel; /* AM-specific parallel scan information */
+//	struct ParallelOScanDescData   *os_parallel; /* AM-specific parallel scan information */
 
 } OScanDescData;
 typedef OScanDescData *OScanDesc;
@@ -831,7 +831,7 @@ orioledb_scan_analyze_next_tuple(TableScanDesc scan, TransactionId OldestXmin,
 
 	while (true)
 	{
-		tuple = btree_seq_scan_getnext_raw(oscan->scan, slot->tts_mcxt, &end, &hint);
+		tuple = btree_seq_scan_getnext_raw(oscan->scan, slot->tts_mcxt, &end, &hint, oscan->rs_base.rs_parallel);
 
 		if (end || ItemPointerGetOffsetNumber(&oscan->iptr) > NUM_TUPLES_PER_BLOCK)
 			return false;
@@ -1154,7 +1154,7 @@ orioledb_beginscan(Relation relation, Snapshot snapshot,
 	if (descr)
 	{
 		o_btree_load_shmem(&GET_PRIMARY(descr)->desc);
-		scan->scan = make_btree_seq_scan(&GET_PRIMARY(descr)->desc, scan->csn, (ParallelOScanDesc) parallel_scan);
+		scan->scan = make_btree_seq_scan(&GET_PRIMARY(descr)->desc, scan->csn, parallel_scan);
 	}
 
 	return &scan->rs_base;
@@ -1243,7 +1243,7 @@ orioledb_getnextslot(TableScanDesc sscan, ScanDirection direction,
 		descr = relation_get_descr(scan->rs_base.rs_rd);
 
 		tuple = btree_seq_scan_getnext(scan->scan, slot->tts_mcxt,
-									   &tupleCsn, &hint);
+									   &tupleCsn, &hint, scan->rs_base.rs_parallel);
 
 		if (O_TUPLE_IS_NULL(tuple))
 			return false;
@@ -1450,11 +1450,11 @@ orioledb_acquire_sample_rows(Relation relation, int elevel,
 	reservoir_init_selection_state(&rstate, targrows);
 
 	tuple = btree_seq_scan_getnext_raw(scan, CurrentMemoryContext,
-									   &scanEnd, NULL);
+									   &scanEnd, NULL, NULL);
 	while (!scanEnd)
 	{
 		tuple = btree_seq_scan_getnext_raw(scan, CurrentMemoryContext,
-										   &scanEnd, NULL);
+										   &scanEnd, NULL, NULL);
 
 		if (!O_TUPLE_IS_NULL(tuple))
 		{
