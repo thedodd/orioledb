@@ -1281,16 +1281,15 @@ orioledb_get_relation_info_hook(PlannerInfo *rootPageBlkno,
 								RelOptInfo *rel)
 {
 	Relation	relation;
-	BlockNumber heap_blocks;
-	double      reltuples;
-	double      allvisfrac;
+//	BlockNumber heap_blocks;
+//	double      reltuples;
+//	double      allvisfrac;
 
 	relation = table_open(relationObjectId, NoLock);
 
 	if (is_orioledb_rel(relation))
 	{
 		/* Evade parallel scan of OrioleDB's tables */
-//		rel->rel_parallel_workers = 0;
 		rel->rel_parallel_workers = RelationGetParallelWorkers(relation, -1);
 		elog(WARNING,"consider_parallel %d", rel->consider_parallel);
 //		orioledb_estimate_rel_size(relation, NULL, &heap_blocks, &reltuples, &allvisfrac);
