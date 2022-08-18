@@ -225,16 +225,16 @@ load_or_clear_fixed_hikey(BTreeSeqScan *scan, Page p)
 	}
 }
 
-static inline uint32
+static inline uint16
 debug_print_page_hikey (Page p)
 {
 	OTuple hikey;
 
 	if (O_PAGE_IS(p, RIGHTMOST))
-			return 1000000;
+			return 9999;
 
 	BTREE_PAGE_GET_HIKEY(hikey, p);
-	return (uint32) hikey.data[SizeOfOTupleHeader];
+	return (uint16) hikey.data[SizeOfOTupleHeader];
 }
 
 static bool
@@ -242,6 +242,7 @@ load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan, int *loade
 {
 	bool 		has_next = false;
 	int 		update_shared_page;
+	bool 		rightmost;
 
 	scan->context.flags &= ~BTREE_PAGE_FIND_DOWNLINK_LOCATION;
 
@@ -256,26 +257,19 @@ load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan, int *loade
 		{
 			OTuple prevHikey;
 
+			/* When last page in slot 0, slot 1 is empty */
+			Assert (!O_PAGE_IS(poscan->int_page[0].img, RIGHTMOST));
+
 			/* Save previous Hikey of int_page[0] in shared state before it is
 			 * rewritten by int_page[1]
-			 * */
-			if (!O_PAGE_IS(poscan->int_page[0].img, RIGHTMOST))
-			{
-				BTREE_PAGE_GET_HIKEY(prevHikey, poscan->int_page[0].img);
-				copy_fixed_shmem_key(scan->desc, &poscan->prevHikey, prevHikey);
-				
-				elog(WARNING, "worker %d copy shared int page slot #1 -> #0. level %u outer %s hikey %u", scan->worker_number, PAGE_GET_LEVEL(poscan->int_page[1].img), outer ? "Y" : "N", debug_print_page_hikey(poscan->int_page[1].img));
+			 */
+			BTREE_PAGE_GET_HIKEY(prevHikey, poscan->int_page[0].img);
+			copy_fixed_shmem_key(scan->desc, &poscan->prevHikey, prevHikey);
 
-				memmove(&poscan->int_page[0], &poscan->int_page[1], sizeof(BTreeIntPageParallelData));
-				poscan->int_page[1].is_empty = true;
-			}
-			else
-			{
-		//		clear_fixed_key(&poscan->prevHikey.fixed);
-				elog(WARNING, "worker %d RIGHTMOST shared int page in slot #0. level %u outer %s",
-					scan->worker_number, PAGE_GET_LEVEL(poscan->int_page[0].img),
-					outer ? "Y" : "N");
-			}
+			elog(WARNING, "worker %d copy shared int page slot #1 -> #0. level %u outer %s hikey %u", scan->worker_number, PAGE_GET_LEVEL(poscan->int_page[1].img), outer ? "Y" : "N", debug_print_page_hikey(poscan->int_page[1].img));
+
+			memmove(&poscan->int_page[0], &poscan->int_page[1], sizeof(BTreeIntPageParallelData));
+			poscan->int_page[1].is_empty = true;
 		}
 
 		/* first int page need to be loaded */
@@ -290,9 +284,9 @@ load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan, int *loade
 		 */
 		else
 		{
-			bool rightmost = load_or_clear_fixed_hikey(scan, poscan->int_page[0].img);
+		 	rightmost = load_or_clear_fixed_hikey(scan, poscan->int_page[0].img);
 
-			if(poscan->int_page[1].is_empty && ! rightmost)
+			if(poscan->int_page[1].is_empty && !rightmost)
 				update_shared_page = 1;
 			else
 				update_shared_page = -1;
@@ -313,10 +307,17 @@ load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan, int *loade
 				  BTreeKeyNonLeafKey, 1);
 	}
 	else
-		find_page(&scan->context, NULL, BTreeKeyNone, 1);
-
+	{
+		elog(WARNING, "=========");
+		if (!poscan || !rightmost)
+		{
+			elog(WARNING, "+++++++++");
+			find_page(&scan->context, NULL, BTreeKeyNone, 1);
+		}
+	}
 	/* hikey from next found page */
-	load_or_clear_fixed_hikey(scan, scan->context.img);
+	if(!rightmost)
+		load_or_clear_fixed_hikey(scan, scan->context.img);
 
 	if (PAGE_GET_LEVEL(scan->context.img) == 1)
 	{
@@ -351,6 +352,8 @@ load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan, int *loade
 			/* Load current internal page from shared state to the backend */
 			if (outer)
 			{
+				has_next = true;
+
 				SpinLockAcquire(&poscan->mutex);
 				if (!poscan->int_page[0].is_empty)
 				{
@@ -362,8 +365,6 @@ load_next_internal_page(BTreeSeqScan *scan, ParallelOScanDesc poscan, int *loade
 					copy_from_fixed_shmem_key(&scan->prevHikey, &poscan->prevHikey);
 				}
 				SpinLockRelease(&poscan->mutex);
-
-				has_next = true;
 			}
 		}
 		else
