@@ -455,38 +455,8 @@ iterate_internal_page(BTreeSeqScan *scan)
 		bool		valid_downlink = true;
 
 		if (scan->cb && scan->cb->isRangeValid)
-		{
-//			BTreePageHeader *header = (BTreePageHeader *) scan->context.img;
-//			BTreePageItemLocator end_locator = scan->intLoc;
-//			OTuple		end_tuple;
-//			bool		has_next_downlink = true;
-
-//			O_TUPLE_SET_NULL(end_tuple);
-
-//			BTREE_PAGE_LOCATOR_NEXT(scan->context.img, &end_locator);
-
-//			if (end_locator.chunkOffset == header->chunksCount - 1)
-//			{
-//				if (end_locator.itemOffset ==
-//					end_locator.chunkItemsCount)
-//				{
-//					if (!O_PAGE_IS(scan->context.img, RIGHTMOST))
-//						end_tuple = scan->curHikey.tuple;
-//					has_next_downlink = false;
-//				}
-//			}
-
-//			if (has_next_downlink)
-//			{
-//				BTreeNonLeafTuphdr *tuphdr pg_attribute_unused();
-
-//				BTREE_PAGE_READ_INTERNAL_ITEM(tuphdr, end_tuple,
-//											  scan->context.img, &end_locator);
-				//Assert(end_tuple.data == int_hikey.tuple.data);
-//			}
 			valid_downlink = scan->cb->isRangeValid(int_lokey.tuple, int_hikey.tuple,
 													scan->arg);
-		}
 		else if (scan->needSampling)
 		{
 			if (scan->samplingNumber < scan->samplingNext)
@@ -560,7 +530,6 @@ iterate_internal_page(BTreeSeqScan *scan)
 			}
 		}
 	}
-
 	return false;
 }
 
