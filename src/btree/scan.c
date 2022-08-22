@@ -112,7 +112,8 @@ struct BTreeSeqScan
 
 	BTreeSeqScanCallbacks *cb;
 	void	   *arg;
-	bool 		firstpage;
+	bool 		intpage_loaded;	/* We iterate intenal page and don't need to load new */
+	bool 		is_empty; 		/* Scan couldn't read first internal page */
 };
 
 static dlist_head listOfScans = DLIST_STATIC_INIT(listOfScans);
@@ -361,10 +362,30 @@ get_next_key(BTreeSeqScan *scan, BTreePageItemLocator *intLoc, OFixedKey *next_k
 		clear_fixed_key(next_key);
 }
 
+/* Returns true and next downlink, lokey and hikey.
+ * Returns false if not fetched next dowlink: internal page is finished and need to load a new page or not loaded (empty
+ * scan).
+ */
 static bool
 get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 				  OFixedKey *int_lokey, OFixedKey *int_hikey)
 {
+	/* Try to load next internal page if needed */
+	if (!scan->intpage_loaded)
+	{
+		if (!load_next_internal_page(scan))
+		{
+			/* first page only */
+			Assert(O_PAGE_IS(scan->context.img, LEFTMOST));
+			scan->is_empty = true;
+			clear_fixed_key(int_lokey);
+			clear_fixed_key(int_hikey);
+			return false;
+		}
+		else
+			scan->intpage_loaded = true;
+	}
+
 	if (BTREE_PAGE_LOCATOR_IS_VALID(scan->context.img, &scan->intLoc)) /* inside int page */
 	{
 		BTreeNonLeafTuphdr *tuphdr;
@@ -396,7 +417,10 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 		return true;
 	}
 	else /* end int page */
+	{
+		scan->intpage_loaded = false;
 		return false;
+	}
 }
 
 /*
@@ -540,13 +564,6 @@ load_next_in_memory_leaf_page(BTreeSeqScan *scan)
 	{
 		if (O_TUPLE_IS_NULL(scan->curHikey.tuple))
 			return false;
-		else
-		{
-			bool            result PG_USED_FOR_ASSERTS_ONLY;
-
-			result = load_next_internal_page(scan);
-			Assert(result);
-		}
 	}
 	return true;
 }
@@ -663,13 +680,14 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 						   BTREE_PAGE_FIND_READ_CSN);
 	clear_fixed_key(&scan->prevHikey);
 	clear_fixed_key(&scan->curHikey);
-	if (load_next_internal_page(scan))
-		if (!load_next_in_memory_leaf_page(scan))
-		{
-			switch_to_disk_scan(scan);
-			if (!load_next_disk_leaf_page(scan))
-			scan->status = BTreeSeqScanFinished;
-		}
+	scan->intpage_loaded = false;
+	scan->is_empty = false;
+	if (!load_next_in_memory_leaf_page(scan) && !scan->is_empty)
+	{
+		switch_to_disk_scan(scan);
+		if (!load_next_disk_leaf_page(scan))
+		scan->status = BTreeSeqScanFinished;
+	}
 
 	return scan;
 }
