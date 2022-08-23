@@ -188,7 +188,7 @@ ifdef VALGRIND
 override with_temp_install += PGCTLTIMEOUT=1200 \
 	valgrind --leak-check=no --gen-suppressions=all \
 	--suppressions=valgrind.supp --time-stamp=yes \
-	--log-file=pid-%p.log --trace-children=yes \
+	--log-file=pid-%p.log --trace-children=yes --track-origins=yes \
 	--trace-children-skip=*/initdb
 else
 override with_temp_install += PGCTLTIMEOUT=900
