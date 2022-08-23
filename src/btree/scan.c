@@ -114,11 +114,13 @@ struct BTreeSeqScan
 	void	   *arg;
 	bool 		intpage_loaded;	/* We iterate intenal page and don't need to load new */
 	bool 		is_empty; 		/* Scan couldn't read first internal page */
+	OFixedKey   int_lokey,
+				int_hikey;
 };
 
 static dlist_head listOfScans = DLIST_STATIC_INIT(listOfScans);
 
-static void scan_make_iterator(BTreeSeqScan *scan, OFixedKey startKey, OFixedKey int_hikey);
+static void scan_make_iterator(BTreeSeqScan *scan, OTuple startKey, OTuple int_hikey);
 static void get_next_key(BTreeSeqScan *scan, BTreePageItemLocator *intLoc, OFixedKey *next_key);
 //#define OELOG(arg) elog(WARNING, arg)
 #define OELOG(arg)
@@ -260,10 +262,8 @@ load_next_internal_page(BTreeSeqScan *scan)
 							&scan->prevHikey.tuple, BTreeKeyNonLeafKey,
 							&intTup, BTreeKeyNonLeafKey) != 0)
 			{
-				OFixedKey int_hikey;
-
-				get_next_key(scan, &scan->intLoc, &int_hikey);
-				scan_make_iterator(scan, scan->prevHikey, int_hikey);
+				get_next_key(scan, &scan->intLoc, &scan->int_hikey);
+				scan_make_iterator(scan, scan->prevHikey.tuple, scan->int_hikey.tuple);
 			}
 		}
 		has_next = true;
@@ -329,13 +329,13 @@ switch_to_disk_scan(BTreeSeqScan *scan)
  * downlink.
  */
 static void
-scan_make_iterator(BTreeSeqScan *scan, OFixedKey int_lokey, OFixedKey int_hikey)
+scan_make_iterator(BTreeSeqScan *scan, OTuple int_lokey, OTuple int_hikey)
 {
 	MemoryContext mctx;
 
 	mctx = MemoryContextSwitchTo(scan->mctx);
-	if (!O_TUPLE_IS_NULL(int_lokey.tuple))
-		scan->iter = o_btree_iterator_create(scan->desc, &int_lokey.tuple, BTreeKeyNonLeafKey,
+	if (!O_TUPLE_IS_NULL(int_lokey))
+		scan->iter = o_btree_iterator_create(scan->desc, &int_lokey, BTreeKeyNonLeafKey,
 											 scan->snapshotCsn,
 											 ForwardScanDirection);
 	else
@@ -346,7 +346,7 @@ scan_make_iterator(BTreeSeqScan *scan, OFixedKey int_lokey, OFixedKey int_hikey)
 
 	BTREE_PAGE_LOCATOR_SET_INVALID(&scan->leafLoc);
 	scan->haveHistImg = false;
-	scan->iterEnd = int_hikey.tuple;
+	scan->iterEnd = int_hikey;
 }
 
 /* Output next key and locator on a current internal page */
@@ -431,7 +431,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
  * we're considering the last downlink.
  */
 static void
-check_in_memory_leaf_page(BTreeSeqScan *scan, OFixedKey int_lokey, OFixedKey int_hikey)
+check_in_memory_leaf_page(BTreeSeqScan *scan, OTuple int_lokey, OTuple int_hikey)
 {
 	OTuple		leafHikey;
 	bool		result = false;
@@ -441,17 +441,17 @@ check_in_memory_leaf_page(BTreeSeqScan *scan, OFixedKey int_lokey, OFixedKey int
 	else
 		O_TUPLE_SET_NULL(leafHikey);
 
-	if (O_TUPLE_IS_NULL(int_hikey.tuple) && O_TUPLE_IS_NULL(leafHikey))
+	if (O_TUPLE_IS_NULL(int_hikey) && O_TUPLE_IS_NULL(leafHikey))
 		return;
 
-	if (O_TUPLE_IS_NULL(int_hikey.tuple) || O_TUPLE_IS_NULL(leafHikey))
+	if (O_TUPLE_IS_NULL(int_hikey) || O_TUPLE_IS_NULL(leafHikey))
 	{
 		result = true;
 	}
 	else
 	{
 		if (o_btree_cmp(scan->desc,
-						&int_hikey.tuple, BTreeKeyNonLeafKey,
+						&int_hikey, BTreeKeyNonLeafKey,
 						&leafHikey, BTreeKeyNonLeafKey) != 0)
 			result = true;
 	}
@@ -471,15 +471,13 @@ static bool
 iterate_internal_page(BTreeSeqScan *scan)
 {
 	uint64      downlink = 0;
-	OFixedKey 	int_lokey,
-				int_hikey;
 
-	while (get_next_downlink(scan, &downlink, &int_lokey, &int_hikey))
+	while (get_next_downlink(scan, &downlink, &scan->int_lokey, &scan->int_hikey))
 	{
 		bool		valid_downlink = true;
 
 		if (scan->cb && scan->cb->isRangeValid)
-			valid_downlink = scan->cb->isRangeValid(int_lokey.tuple, int_hikey.tuple,
+			valid_downlink = scan->cb->isRangeValid(scan->int_lokey.tuple, scan->int_hikey.tuple,
 													scan->arg);
 		else if (scan->needSampling)
 		{
@@ -519,7 +517,7 @@ iterate_internal_page(BTreeSeqScan *scan)
 
 				if (result == ReadPageResultOK)
 				{
-					check_in_memory_leaf_page(scan, int_lokey, int_hikey);
+					check_in_memory_leaf_page(scan, scan->int_lokey.tuple, scan->int_hikey.tuple);
 					if (scan->iter)
 						return true;
 
@@ -533,7 +531,7 @@ iterate_internal_page(BTreeSeqScan *scan)
 				}
 				else
 				{
-					scan_make_iterator(scan, int_lokey, int_hikey);
+					scan_make_iterator(scan, scan->int_lokey.tuple, scan->int_hikey.tuple);
 					Assert(scan->iter);
 					return true;
 				}
@@ -548,7 +546,7 @@ iterate_internal_page(BTreeSeqScan *scan)
 
 				wait_for_io_completion(ionum);
 
-				scan_make_iterator(scan, int_lokey, int_hikey);
+				scan_make_iterator(scan, scan->int_lokey.tuple, scan->int_hikey.tuple);
 				Assert(scan->iter);
 				return true;
 			}
@@ -680,6 +678,8 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 						   BTREE_PAGE_FIND_READ_CSN);
 	clear_fixed_key(&scan->prevHikey);
 	clear_fixed_key(&scan->curHikey);
+	clear_fixed_key(&scan->int_hikey);
+	clear_fixed_key(&scan->int_lokey);
 	scan->intpage_loaded = false;
 	scan->is_empty = false;
 	if (!load_next_in_memory_leaf_page(scan) && !scan->is_empty)
