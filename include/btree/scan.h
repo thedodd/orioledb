@@ -27,7 +27,8 @@ typedef struct BTreeSeqScanCallbacks
 	bool		(*getNextKey) (OFixedKey *key, bool inclusive, void *arg);
 } BTreeSeqScanCallbacks;
 
-extern BTreeSeqScan *make_btree_seq_scan(BTreeDescr *desc, CommitSeqNo csn);
+extern BTreeSeqScan *make_btree_seq_scan(BTreeDescr *desc, CommitSeqNo csn,
+										 void *poscan);
 extern BTreeSeqScan *make_btree_seq_scan_cb(BTreeDescr *desc, CommitSeqNo csn,
 											BTreeSeqScanCallbacks *cb,
 											void *arg);
