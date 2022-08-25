@@ -69,6 +69,7 @@ OBJS = src/btree/btree.o \
 REGRESSCHECKS = btree_sys_check \
 				btree_compression \
 				btree_print \
+				parallel_scan \
 				bitmap_scan \
 				collate \
 				ddl \

@@ -1065,6 +1065,52 @@ orioledb_scan_sample_next_tuple(TableScanDesc scan, SampleScanState *scanstate,
 	return false;
 }
 
+Size
+orioledb_parallelscan_estimate(Relation rel)
+{
+//	elog(WARNING, ">> orioledb_parallelscan_estimate");
+	Assert(is_orioledb_rel(rel));
+
+	return sizeof(ParallelOScanDescData);
+}
+
+/* Modified copy of table_block_parallelscan_initialize */
+Size
+orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
+{
+	ParallelOScanDesc poscan = (ParallelOScanDesc) pscan;
+
+	poscan->phs_base.phs_relid = RelationGetRelid(rel);
+	poscan->nblocks = RelationGetNumberOfBlocks(rel);
+	poscan->phs_base.phs_syncscan = false; // synchronize_seqscans && !RelationUsesLocalBuffers(rel) && poscan->pos_nblocks > NBuffers / 4;
+	SpinLockInit(&poscan->intpage_access);
+	SpinLockInit(&poscan->worker_start);
+	SpinLockInit(&poscan->intpage_loading);
+	clear_fixed_key(&poscan->prevHikey.fixed);
+	poscan->int_page[0].loaded=false;
+	poscan->single_leaf_page_rel = false;
+	poscan->offset = 0;
+	poscan->leader_started = false;
+	poscan->cur_int_pageno = 0;
+	poscan->int_finish = false;
+	poscan->first_page_loaded = false;
+	memset(poscan->int_page[0].img, 0, ORIOLEDB_BLCKSZ);
+	memset(poscan->worker_active, 0, sizeof(poscan->worker_active));
+
+//	elog(DEBUG1, ">> %s", PG_FUNCNAME_MACRO);
+	Assert(is_orioledb_rel(rel));
+
+	return sizeof(ParallelOScanDescData);
+}
+
+void
+orioledb_parallelscan_reinitialize(Relation rel, ParallelTableScanDesc pscan)
+{
+	Assert(is_orioledb_rel(rel));
+	elog(ERROR, "Not implemented: %s", PG_FUNCNAME_MACRO);
+}
+
+
 static TableScanDesc
 orioledb_beginscan(Relation relation, Snapshot snapshot,
 				   int nkeys, ScanKey key,
@@ -1108,7 +1154,7 @@ orioledb_beginscan(Relation relation, Snapshot snapshot,
 	if (descr)
 	{
 		o_btree_load_shmem(&GET_PRIMARY(descr)->desc);
-		scan->scan = make_btree_seq_scan(&GET_PRIMARY(descr)->desc, scan->csn);
+		scan->scan = make_btree_seq_scan(&GET_PRIMARY(descr)->desc, scan->csn, parallel_scan);
 	}
 
 	return &scan->rs_base;
@@ -1131,7 +1177,7 @@ orioledb_rescan(TableScanDesc sscan, ScanKey key, bool set_params,
 		free_btree_seq_scan(scan->scan);
 
 	o_btree_load_shmem(&GET_PRIMARY(descr)->desc);
-	scan->scan = make_btree_seq_scan(&GET_PRIMARY(descr)->desc, scan->csn);
+	scan->scan = make_btree_seq_scan(&GET_PRIMARY(descr)->desc, scan->csn, NULL);
 }
 
 static void
@@ -1212,30 +1258,6 @@ orioledb_getnextslot(TableScanDesc sscan, ScanDirection direction,
 	while (!result);
 
 	return true;
-}
-
-/*
- * partial (and parallel) scans disabled by orioledb_set_rel_pathlist_hook()
- */
-static Size
-orioledb_parallelscan_estimate(Relation rel)
-{
-	elog(ERROR, "Not implemented: %s", PG_FUNCNAME_MACRO);
-	return 0;
-}
-
-static Size
-orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
-{
-	elog(ERROR, "Not implemented: %s", PG_FUNCNAME_MACRO);
-	return 0;
-}
-
-static void
-orioledb_parallelscan_reinitialize(Relation rel,
-								   ParallelTableScanDesc pscan)
-{
-	elog(ERROR, "Not implemented: %s", PG_FUNCNAME_MACRO);
 }
 
 static void

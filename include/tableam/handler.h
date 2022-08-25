@@ -135,4 +135,49 @@ extern OTableDescr *relation_get_descr(Relation rel);
 extern void table_descr_inc_refcnt(OTableDescr *descr);
 extern void table_descr_dec_refcnt(OTableDescr *descr);
 
+extern Size orioledb_parallelscan_estimate(Relation rel);
+extern Size orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan);
+extern void orioledb_parallelscan_reinitialize(Relation rel, ParallelTableScanDesc pscan);
+
+/*
+ * Oriole-specific shared state for parallel table scan.
+ *
+ * Each backend participating in a parallel table scan has its own
+ * OScanDesc in backend-private memory, and those objects all contain a
+ * pointer to this structure.  The information here must be sufficient to
+ * properly initialize each new OScanDesc as workers join the scan, and it
+ * must act as a information what to scan for those workers.
+ */
+
+typedef struct BTreeIntPageParallelData
+{
+       char                            img[ORIOLEDB_BLCKSZ];
+       bool                            loaded;
+} BTreeIntPageParallelData;
+
+typedef BTreeIntPageParallelData *BTreeIntPageParallel;
+
+typedef struct ParallelOScanDescData
+{
+       ParallelTableScanDescData        phs_base;         /* Shared AM-independent state for parallel table scan */
+       BlockNumber                      nblocks; //maybe not needed
+       slock_t                          intpage_access;   /* for current position on level 1 internal page */
+       slock_t                          worker_start;	  /* for sequential workers joining */
+	   slock_t							intpage_loading;  /* for sequential internal page loading */
+       int                              offset;			  /* current offset on internal level1 page to restore locator
+	   														 in parallel workers */
+       OFixedShmemKey                   prevHikey;        /* low key of current level1 page loaded to shared state */
+	   bool 							single_leaf_page_rel;
+       BTreeIntPageParallelData         int_page[1];
+       bool                            	leader_started;
+       bool                             worker_active[10]; /* array of started workers for debug usage */
+	   bool								int_finish;		   /* internal pages scan finish flag to avoid copying CurHikey into shared state */
+	   bool 							first_page_loaded;
+	   int								cur_int_pageno; 	//debug
+       // TODO implement shared downlinks storage
+       //int64                                    downlinkIndex;
+       // BTreeSeqScanDiskDownlink         diskDownlinks[FLEXIBLE_ARRAY_MEMBER];
+} ParallelOScanDescData;
+
+typedef ParallelOScanDescData *ParallelOScanDesc;
 #endif

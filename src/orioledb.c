@@ -1287,7 +1287,10 @@ orioledb_get_relation_info_hook(PlannerInfo *rootPageBlkno,
 	if (is_orioledb_rel(relation))
 	{
 		/* Evade parallel scan of OrioleDB's tables */
-		rel->rel_parallel_workers = 0;
+		rel->rel_parallel_workers = RelationGetParallelWorkers(relation, -1);
+		if(rel->rel_parallel_workers > 0)
+			elog(WARNING, "Rel parallel workers = %d", rel->rel_parallel_workers);
+
 		if (relation->rd_rel->relhasindex)
 		{
 			int			i;
