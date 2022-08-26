@@ -524,6 +524,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 
 	if (poscan && poscan->int_finish)
 	{
+		elog(WARNING, "^^^^^^ worker %d int_finish, page %d%s%s, offset %d", scan->worker_number, poscan->cur_int_pageno, O_PAGE_IS(int_page_ptr, LEFTMOST) ? " LEFTMOST" : "",       O_PAGE_IS(int_page_ptr, RIGHTMOST) ? " RIGHTMOST" : "" ,poscan->offset);
 		ParallelSpinLockRelease(scan, &poscan->intpage_access);
 		return false;
 	}
@@ -553,7 +554,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 			if(poscan)
 			{
 				poscan->offset = BTREE_PAGE_LOCATOR_GET_OFFSET(int_page_ptr, &scan->intLoc);
-				scan->poscan->first_page_loaded = true;
+//				scan->poscan->first_page_loaded = true;
 				poscan->cur_int_pageno++;
 				//scan->cur_int_pageno = poscan->cur_int_pageno;
 				elog(WARNING, "worker %d loaded intpage, page %d%s%s, offset %d", scan->worker_number, poscan->cur_int_pageno, O_PAGE_IS(int_page_ptr, LEFTMOST) ? " LEFTMOST" : "",  O_PAGE_IS(int_page_ptr, RIGHTMOST) ? " RIGHTMOST" : "" ,poscan->offset);
@@ -570,8 +571,8 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 	if (poscan)
 		BTREE_PAGE_OFFSET_GET_LOCATOR(int_page_ptr, poscan->offset, &scan->intLoc);
 
-//	if (poscan)
-//		 elog(WARNING, "worker %d get page %d, item offset %d", scan->worker_number, poscan->cur_int_pageno, poscan->offset);
+	if (poscan)
+		 elog(WARNING, "worker %d get page %d, item offset %d", scan->worker_number, poscan->cur_int_pageno, poscan->offset);
 
 	if (BTREE_PAGE_LOCATOR_IS_VALID(int_page_ptr, &scan->intLoc)) /* inside int page */
 	{
@@ -604,7 +605,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 		get_next_key(scan, &scan->intLoc, int_hikey, int_page_ptr);
 		if (poscan && O_TUPLE_IS_NULL(int_hikey->tuple))
 		{
-			OELOG("~~~~~~~~~~~~~~~~~int_finish");
+			elog(WARNING, "worker %d ~~~~~~~~~~~ int_finish, page %d%s%s, offset %d", scan->worker_number, poscan->cur_int_pageno, O_PAGE_IS(int_page_ptr, LEFTMOST) ? " LEFTMOST" : "",       O_PAGE_IS(int_page_ptr, RIGHTMOST) ? " RIGHTMOST" : "" ,poscan->offset);
 			poscan->int_finish = true;
 		}
 
@@ -780,7 +781,12 @@ load_next_in_memory_leaf_page(BTreeSeqScan *scan)
 	while (!iterate_internal_page(scan))
 	{
 		if (intpages_scan_finished(scan))
+		{
+			if(scan->poscan)
+				elog(WARNING, "++++++++ worker %d int_finish, page %d, offset %d", scan->worker_number, scan->poscan->cur_int_pageno, scan->poscan->offset);
+
 			return false;
+		}
 	}
 	return true;
 }
