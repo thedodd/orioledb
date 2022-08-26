@@ -116,6 +116,7 @@ struct BTreeSeqScan
 	bool 		is_empty; 		/* Scan couldn't read first internal page */
 	OFixedKey   int_lokey,
 				int_hikey;
+	bool 		first_page_loaded;
 };
 
 static dlist_head listOfScans = DLIST_STATIC_INIT(listOfScans);
@@ -218,17 +219,31 @@ load_next_historical_page(BTreeSeqScan *scan)
 	BTREE_PAGE_LOCATOR_FIRST(scan->histImg, &scan->histLoc);
 }
 
+static inline OTuple
+int_page_hikey(BTreeSeqScan *scan, Page page)
+{
+	OTuple res;
+
+	if (scan->first_page_loaded && !O_PAGE_IS(page, RIGHTMOST))
+		return page_get_hikey(page);
+	else
+	{
+		O_TUPLE_SET_NULL(res);
+		return res;
+	}
+}
+
 static bool
 load_next_internal_page(BTreeSeqScan *scan)
 {
 	bool		has_next = false;
 
 	scan->context.flags |= BTREE_PAGE_FIND_DOWNLINK_LOCATION;
-	if (!O_TUPLE_IS_NULL(scan->curHikey.tuple))
+
+	if (!O_TUPLE_IS_NULL(int_page_hikey(scan, scan->context.img)))
 	{
-		copy_fixed_key(scan->desc, &scan->prevHikey, scan->curHikey.tuple);
-		find_page(&scan->context, &scan->prevHikey.tuple,
-				  BTreeKeyNonLeafKey, 1);
+		copy_fixed_key(scan->desc, &scan->prevHikey, int_page_hikey(scan, scan->context.img));
+		find_page(&scan->context,  &scan->prevHikey.tuple, BTreeKeyNonLeafKey, 1);
 	}
 	else
 	{
@@ -236,10 +251,7 @@ load_next_internal_page(BTreeSeqScan *scan)
 		find_page(&scan->context, NULL, BTreeKeyNone, 1);
 	}
 
-	if (!O_PAGE_IS(scan->context.img, RIGHTMOST))
-		copy_fixed_hikey(scan->desc, &scan->curHikey, scan->context.img);
-	else
-		clear_fixed_key(&scan->curHikey);
+	scan->first_page_loaded = true;
 
 	if (PAGE_GET_LEVEL(scan->context.img) == 1)
 	{
@@ -560,7 +572,7 @@ load_next_in_memory_leaf_page(BTreeSeqScan *scan)
 {
 	while (!iterate_internal_page(scan))
 	{
-		if (O_TUPLE_IS_NULL(scan->curHikey.tuple))
+		if (O_TUPLE_IS_NULL(int_page_hikey(scan, scan->context.img)))
 			return false;
 	}
 	return true;
@@ -627,6 +639,7 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 	scan->cb = cb;
 	scan->arg = arg;
 	scan->firstNextKey = true;
+	scan->first_page_loaded = false;
 
 	scan->samplingNumber = 0;
 	scan->sampler = sampler;
