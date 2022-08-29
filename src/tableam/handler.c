@@ -1187,6 +1187,9 @@ orioledb_endscan(TableScanDesc sscan)
 
 	STOPEVENT(STOPEVENT_SCAN_END, NULL);
 
+	if(scan->rs_base.rs_flags & SO_TEMP_SNAPSHOT)
+		UnregisterSnapshot(scan->rs_base.rs_snapshot);
+
 	if (scan->scan)
 		free_btree_seq_scan(scan->scan);
 }
