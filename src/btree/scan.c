@@ -226,12 +226,6 @@ load_next_historical_page(BTreeSeqScan *scan)
 	BTREE_PAGE_LOCATOR_FIRST(scan->histImg, &scan->histLoc);
 }
 
-static inline bool
-is_first_page_loaded(BTreeSeqScan *scan)
-{
-	return scan->poscan ? scan->poscan->first_page_loaded : scan->first_page_loaded;
-}
-
 static inline void
 set_first_page_loaded(BTreeSeqScan *scan)
 {
@@ -239,6 +233,12 @@ set_first_page_loaded(BTreeSeqScan *scan)
 		scan->poscan->first_page_loaded = true;
 	else
 		scan->first_page_loaded = true;
+}
+
+static inline bool
+is_first_page_loaded(BTreeSeqScan *scan)
+{
+	return scan->poscan ? scan->poscan->first_page_loaded : scan->first_page_loaded;
 }
 
 static inline OTuple
@@ -255,69 +255,23 @@ int_page_hikey(BTreeSeqScan *scan, Page page)
 	}
 }
 
-static inline void
-push_prev_hikey(BTreeSeqScan *scan)
-{
-	if(scan->poscan)
-		copy_fixed_shmem_key(scan->desc, &scan->poscan->prevHikey, scan->prevHikey.tuple);
-}
-
-static inline void
-clear_prev_hikey(BTreeSeqScan *scan)
-{
-	if(scan->poscan)
-		clear_fixed_key(&scan->poscan->prevHikey.fixed);
-	else
-		clear_fixed_key(&scan->prevHikey);
-}
-
-static inline void
-fetch_prev_hikey(BTreeSeqScan *scan)
-{
-	if(scan->poscan)
-			copy_from_fixed_shmem_key(&scan->prevHikey, &scan->poscan->prevHikey);
-}
-
-//static inline void
-//fetch_cur_hikey(BTreeSeqScan *scan)
-//{
-//	if(scan->poscan)
-//			copy_from_fixed_shmem_key(&scan->curHikey, &scan->poscan->curHikey);
-//}
-
-
-static inline bool
-prev_hikey_isnull(BTreeSeqScan *scan)
-{
-	return scan->poscan ? O_TUPLE_IS_NULL(scan->poscan->prevHikey.fixed.tuple) :
-						  O_TUPLE_IS_NULL(scan->prevHikey.tuple);
-}
-
-static inline void
-copy_or_clear_fixed_hikey(BTreeSeqScan *scan, OFixedKey *dst, Page page)
-{
-	if (!O_PAGE_IS(page, RIGHTMOST))
-		copy_fixed_hikey(scan->desc, dst, page);
-	else
-		clear_fixed_key(dst);
-}
-
 /*
- * In case of parallel scan when the caller wants to load new internal page into
- * shared state it is responsible for holding a lock preventing the other workers
- * from doing the same thing.
+ * Loads next internal page.
+ *
+ * In case of parallel scan new internal page is also loaded into a shared state and the caller should hold a lock
+ * preventing the other workers from doing the same thing.
  */
 static bool
-load_next_internal_page(BTreeSeqScan *scan, Page int_page_ptr)
+load_next_internal_page(BTreeSeqScan *scan, Page page)
 {
 	bool		has_next = false;
 
 	OELOG(">> load_next_internal_page");
 	scan->context.flags |= BTREE_PAGE_FIND_DOWNLINK_LOCATION;
 
-	if (!O_TUPLE_IS_NULL(int_page_hikey(scan, int_page_ptr)))
+	if (!O_TUPLE_IS_NULL(int_page_hikey(scan, page)))
 	{
-		copy_fixed_key(scan->desc, &scan->prevHikey, int_page_hikey(scan, int_page_ptr));
+		copy_fixed_key(scan->desc, &scan->prevHikey, int_page_hikey(scan, page));
 		find_page(&scan->context,  &scan->prevHikey.tuple, BTreeKeyNonLeafKey, 1);
 	}
 	else
@@ -329,28 +283,30 @@ load_next_internal_page(BTreeSeqScan *scan, Page int_page_ptr)
 	if (scan->poscan && scan->poscan->first_page_loaded)
 		OELOG(">~~> scan->poscan->first_page_loaded");
 
-	/* push previous page hikey to shared state for usage until next page loaded */
-	push_prev_hikey(scan);
 	set_first_page_loaded(scan);
 
-	/* Copy loaded page image into shared state in case of parallel scan */
-	if(int_page_ptr != scan->context.img)
-		memcpy(int_page_ptr, scan->context.img, ORIOLEDB_BLCKSZ);
+	/* In case of parallel scan copy page image into shared state and update previous shared state page Hikey */
+	if(page != scan->context.img)
+	{
+		Assert(scan->poscan);
+		memcpy(page, scan->context.img, ORIOLEDB_BLCKSZ);
+		copy_fixed_shmem_key(scan->desc, &scan->poscan->prevHikey, scan->prevHikey.tuple);
+	}
 
-	if (PAGE_GET_LEVEL(int_page_ptr) == 1)
+	if (PAGE_GET_LEVEL(page) == 1)
 	{
 		/*
 		 * Check if the left bound of the found keyrange corresponds to the
 		 * previous hikey.  Otherwise, use iterator to correct the situation.
 		 */
 		scan->intLoc = scan->context.items[scan->context.index].locator;
-		scan->intStartOffset = BTREE_PAGE_LOCATOR_GET_OFFSET(int_page_ptr, &scan->intLoc);
+		scan->intStartOffset = BTREE_PAGE_LOCATOR_GET_OFFSET(page, &scan->intLoc);
 		if (!O_TUPLE_IS_NULL(scan->prevHikey.tuple))
 		{
 			OTuple	intTup;
 
 			if (scan->intStartOffset > 0)
-				BTREE_PAGE_READ_INTERNAL_TUPLE(intTup, int_page_ptr, &scan->intLoc);
+				BTREE_PAGE_READ_INTERNAL_TUPLE(intTup, page, &scan->intLoc);
 			else
 				intTup = scan->context.lokey.tuple;
 
@@ -358,7 +314,7 @@ load_next_internal_page(BTreeSeqScan *scan, Page int_page_ptr)
 							&scan->prevHikey.tuple, BTreeKeyNonLeafKey,
 							&intTup, BTreeKeyNonLeafKey) != 0)
 			{
-				get_next_key(scan, &scan->intLoc, &scan->int_hikey, int_page_ptr);
+				get_next_key(scan, &scan->intLoc, &scan->int_hikey, page);
 				OELOG("<<< scan_make_iterator");
 				scan_make_iterator(scan, scan->prevHikey.tuple, scan->int_hikey.tuple);
 			}
@@ -367,8 +323,8 @@ load_next_internal_page(BTreeSeqScan *scan, Page int_page_ptr)
 	}
 	else
 	{
-		Assert(PAGE_GET_LEVEL(int_page_ptr) == 0);
-		memcpy(scan->leafImg, int_page_ptr, ORIOLEDB_BLCKSZ);
+		Assert(PAGE_GET_LEVEL(page) == 0);
+		memcpy(scan->leafImg, page, ORIOLEDB_BLCKSZ);
 		BTREE_PAGE_LOCATOR_FIRST(scan->leafImg, &scan->leafLoc);
 		scan->hint.blkno = scan->context.items[0].blkno;
 		scan->hint.pageChangeCount = scan->context.items[0].pageChangeCount;
@@ -446,67 +402,45 @@ scan_make_iterator(BTreeSeqScan *scan, OTuple int_lokey, OTuple int_hikey)
 	scan->iterEnd = int_hikey;
 }
 
-/* Output next key and locator on a current internal page */
+/* Output item downlink and key using provided page and current locator from BTreeSeqScan */
 static void
-get_next_key(BTreeSeqScan *scan, BTreePageItemLocator *intLoc, OFixedKey *next_key, Page int_page_ptr)
+get_current_downlink_key(BTreeSeqScan *scan, OFixedKey *int_lokey, uint64 *downlink, Page page)
 {
-	BTREE_PAGE_LOCATOR_NEXT(int_page_ptr, intLoc);
-	if (BTREE_PAGE_LOCATOR_IS_VALID(int_page_ptr, intLoc))
-		copy_fixed_page_key(scan->desc, next_key, int_page_ptr, intLoc);
-	else if (!O_PAGE_IS(int_page_ptr, RIGHTMOST))
-		copy_fixed_hikey(scan->desc, next_key, int_page_ptr);
+	BTreeNonLeafTuphdr  *tuphdr;
+	OTuple 				 tuple;
+
+	STOPEVENT(STOPEVENT_STEP_DOWN, btree_downlink_stopevent_params(scan->desc,
+			  page, &scan->intLoc));
+
+	BTREE_PAGE_READ_INTERNAL_ITEM(tuphdr, tuple, page, &scan->intLoc);
+	*downlink = tuphdr->downlink;
+
+	if (BTREE_PAGE_LOCATOR_GET_OFFSET(page, &scan->intLoc) != scan->intStartOffset)
+			copy_fixed_key(scan->desc, int_lokey, tuple);
+	else if (!O_PAGE_IS(page, LEFTMOST))
+		{
+			Assert(!O_TUPLE_IS_NULL(scan->prevHikey.tuple));
+			copy_fixed_key(scan->desc, int_lokey, scan->prevHikey.tuple);
+		}
 	else
-		clear_fixed_key(next_key);
+		{
+			Assert(O_TUPLE_IS_NULL(scan->prevHikey.tuple));
+			clear_fixed_key(int_lokey);
+		}
 }
 
-/* Should be called under ParallelSpinLock */
-static inline bool
-intpage_is_loaded(BTreeSeqScan *scan)
+/* Output next key and locator on a provided internal page */
+static void
+get_next_key(BTreeSeqScan *scan, BTreePageItemLocator *intLoc, OFixedKey *int_hikey, Page page)
 {
-	return scan->poscan ? scan->poscan->int_page[0].loaded : scan->intpage_loaded;
-}
-
-/* Should be called under ParallelSpinLock */
-static inline void
-intpage_set_loaded(BTreeSeqScan *scan, bool val)
-{
-	if (scan->poscan)
-		scan->poscan->int_page[0].loaded = val;
+	BTREE_PAGE_LOCATOR_NEXT(page, intLoc);
+	if (BTREE_PAGE_LOCATOR_IS_VALID(page, intLoc))
+		copy_fixed_page_key(scan->desc, int_hikey, page, intLoc);
+	else if (!O_PAGE_IS(page, RIGHTMOST))
+		copy_fixed_hikey(scan->desc, int_hikey, page);
 	else
-		scan->intpage_loaded = val;
+		clear_fixed_key(int_hikey);
 }
-
-/* Should be called under ParallelSpinLock */
-static inline Page
-intpage_ptr(BTreeSeqScan *scan)
-{
-	return scan->poscan ? scan->poscan->int_page[0].img : scan->context.img;
-}
-
-/* Should be called under ParallelSpinLock */
-static inline void
-set_single_leaf_flag(BTreeSeqScan *scan, bool val)
-{
-	if (scan->poscan)
-		scan->poscan->single_leaf_page_rel = val;
-	else
-		scan->single_leaf_page_rel = val;
-}
-
-static inline void
-ParallelSpinLockAcquire(BTreeSeqScan *scan, slock_t *lock)
-{
-	if(scan->poscan)
-		SpinLockAcquire(lock);
-}
-
-static inline void
-ParallelSpinLockRelease(BTreeSeqScan *scan, slock_t *lock)
-{
-	if(scan->poscan)
-		SpinLockRelease(lock);
-}
-
 
 /* Returns true and next downlink, lokey and hikey.
  * Returns false if not fetched next dowlink: internal page is finished and need to load a new page or not loaded (empty
@@ -517,113 +451,108 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 				  OFixedKey *int_lokey, OFixedKey *int_hikey)
 {
 	ParallelOScanDesc poscan = scan->poscan;
-	Page 			  int_page_ptr;
 
-	/* Try to load next internal page if needed */
-	ParallelSpinLockAcquire(scan, &poscan->intpage_access);
-
-	if (poscan && poscan->int_finish)
+	if (poscan)
 	{
-		elog(WARNING, "^^^^^^ worker %d int_finish, page %d%s%s, offset %d", scan->worker_number, poscan->cur_int_pageno, O_PAGE_IS(int_page_ptr, LEFTMOST) ? " LEFTMOST" : "",       O_PAGE_IS(int_page_ptr, RIGHTMOST) ? " RIGHTMOST" : "" ,poscan->offset);
-		ParallelSpinLockRelease(scan, &poscan->intpage_access);
-		return false;
-	}
+		/* Try to load next internal page if needed */
+		SpinLockAcquire(&poscan->intpage_access);
 
-	if (!intpage_is_loaded(scan))
-	{
-		int_page_ptr = intpage_ptr(scan);
-
-		if (!load_next_internal_page(scan, int_page_ptr))
+		if (poscan->int_finish)
 		{
-			if (poscan)
-				OELOG("**** poscan");
-
-			OELOG("**** single leaf");
-			/* first page only */
-			Assert(O_PAGE_IS(int_page_ptr, LEFTMOST));
-			set_single_leaf_flag(scan, true);
-			ParallelSpinLockRelease(scan, &poscan->intpage_access);
-
-			clear_fixed_key(int_lokey);
-			clear_fixed_key(int_hikey);
+			elog(WARNING, "^^^^^^ worker %d int_finish, page %d%s%s, offset %d", scan->worker_number, poscan->cur_int_pageno, O_PAGE_IS(scan->poscan->int_page[0].img, LEFTMOST) ? " LEFTMOST" : "",       O_PAGE_IS(scan->poscan->int_page[0].img, RIGHTMOST) ? " RIGHTMOST" : "" ,poscan->offset);
+			SpinLockRelease(&poscan->intpage_access);
 			return false;
 		}
-		else
+
+		if (!scan->poscan->int_page[0].loaded)
 		{
-			/* Push offset for new loaded page into shared state */
-			if(poscan)
+			if (!load_next_internal_page(scan, scan->poscan->int_page[0].img))
 			{
-				poscan->offset = BTREE_PAGE_LOCATOR_GET_OFFSET(int_page_ptr, &scan->intLoc);
-//				scan->poscan->first_page_loaded = true;
-				poscan->cur_int_pageno++;
-				//scan->cur_int_pageno = poscan->cur_int_pageno;
-				elog(WARNING, "worker %d loaded intpage, page %d%s%s, offset %d", scan->worker_number, poscan->cur_int_pageno, O_PAGE_IS(int_page_ptr, LEFTMOST) ? " LEFTMOST" : "",  O_PAGE_IS(int_page_ptr, RIGHTMOST) ? " RIGHTMOST" : "" ,poscan->offset);
+				OELOG("**** poscan single leaf");
+
+				/* first page only */
+				Assert(O_PAGE_IS(scan->poscan->int_page[0].img, LEFTMOST));
+				scan->poscan->single_leaf_page_rel = true;
+				SpinLockRelease(&poscan->intpage_access);
+
+				clear_fixed_key(int_lokey);
+				clear_fixed_key(int_hikey);
+				return false;
 			}
-			intpage_set_loaded(scan, true);
+			else
+			{
+				/* Push offset for new loaded page into shared state */
+				poscan->offset = BTREE_PAGE_LOCATOR_GET_OFFSET(scan->poscan->int_page[0].img, &scan->intLoc);
+				poscan->cur_int_pageno++;
+				elog(WARNING, "worker %d loaded intpage, page %d%s%s, offset %d", scan->worker_number, poscan->cur_int_pageno, O_PAGE_IS(scan->poscan->int_page[0].img, LEFTMOST) ? " LEFTMOST" : "",  O_PAGE_IS(scan->poscan->int_page[0].img, RIGHTMOST) ? " RIGHTMOST" : "" ,poscan->offset);
+				scan->poscan->int_page[0].loaded = true;
+			}
 		}
-	}
-//	ParallelSpinLockRelease(scan, &poscan->intpage_access);
 
-//	ParallelSpinLockAcquire(scan, &poscan->intpage_access);
-	int_page_ptr = intpage_ptr(scan);
+		/* Get locator from shared state internal item page offset */
+		BTREE_PAGE_OFFSET_GET_LOCATOR(scan->poscan->int_page[0].img, poscan->offset, &scan->intLoc);
+//		elog(WARNING, "worker %d get page %d, item offset %d", scan->worker_number, poscan->cur_int_pageno, poscan->offset);
 
-	/* Get locator from shared state internal item page offset */
-	if (poscan)
-		BTREE_PAGE_OFFSET_GET_LOCATOR(int_page_ptr, poscan->offset, &scan->intLoc);
-
-	if (poscan)
-		 elog(WARNING, "worker %d get page %d, item offset %d", scan->worker_number, poscan->cur_int_pageno, poscan->offset);
-
-	if (BTREE_PAGE_LOCATOR_IS_VALID(int_page_ptr, &scan->intLoc)) /* inside int page */
-	{
-		BTreeNonLeafTuphdr *tuphdr;
-		OTuple 				 tuple;
-
-		STOPEVENT(STOPEVENT_STEP_DOWN, btree_downlink_stopevent_params(scan->desc,
-				  int_page_ptr, &scan->intLoc));
-
-		BTREE_PAGE_READ_INTERNAL_ITEM(tuphdr, tuple, int_page_ptr, &scan->intLoc);
-		*downlink = tuphdr->downlink;
-
-		/* Fetch previous page hikey from shared state */
-		fetch_prev_hikey(scan);
-		/* construct internal item lokey */
-		if (BTREE_PAGE_LOCATOR_GET_OFFSET(int_page_ptr, &scan->intLoc) != scan->intStartOffset)
-			copy_fixed_key(scan->desc, int_lokey, tuple);
-		else if (!O_PAGE_IS(int_page_ptr, LEFTMOST))
+		if (BTREE_PAGE_LOCATOR_IS_VALID(scan->poscan->int_page[0].img, &scan->intLoc)) /* inside int page */
 		{
-			Assert(!O_TUPLE_IS_NULL(scan->prevHikey.tuple));
-			copy_fixed_key(scan->desc, int_lokey, scan->prevHikey.tuple);
+			/* Fetch previous page hikey from shared state */
+			copy_from_fixed_shmem_key(&scan->prevHikey, &scan->poscan->prevHikey);
+			get_current_downlink_key(scan, int_lokey, downlink, scan->poscan->int_page[0].img);
+			/* Get next internal page locator and next internal item hikey */
+			get_next_key(scan, &scan->intLoc, int_hikey, scan->poscan->int_page[0].img);
+			if (O_TUPLE_IS_NULL(int_hikey->tuple))
+			{
+				poscan->int_finish = true;
+				elog(WARNING, "worker %d ~~~~~~~~~~~ int_finish, page %d%s%s, offset %d", scan->worker_number, poscan->cur_int_pageno, O_PAGE_IS(scan->poscan->int_page[0].img, LEFTMOST) ? " LEFTMOST" : "",       O_PAGE_IS(scan->poscan->int_page[0].img, RIGHTMOST) ? " RIGHTMOST" : "" ,poscan->offset);
+			}
+
+			/* Push next internal item page offset into shared state */
+			poscan->offset = BTREE_PAGE_LOCATOR_GET_OFFSET(scan->poscan->int_page[0].img, &scan->intLoc);
+			SpinLockRelease(&poscan->intpage_access);
+
+			return true;
 		}
-		else
+		else /* end int page */
 		{
-			Assert(O_TUPLE_IS_NULL(scan->prevHikey.tuple));
-			clear_fixed_key(int_lokey);
-		}
-
-		/* Get next internal page locator and next internal item hikey */
-		get_next_key(scan, &scan->intLoc, int_hikey, int_page_ptr);
-		if (poscan && O_TUPLE_IS_NULL(int_hikey->tuple))
-		{
-			elog(WARNING, "worker %d ~~~~~~~~~~~ int_finish, page %d%s%s, offset %d", scan->worker_number, poscan->cur_int_pageno, O_PAGE_IS(int_page_ptr, LEFTMOST) ? " LEFTMOST" : "",       O_PAGE_IS(int_page_ptr, RIGHTMOST) ? " RIGHTMOST" : "" ,poscan->offset);
-			poscan->int_finish = true;
-		}
-
-		/* Push next internal item page offset into shared state */
-		if (poscan)
-			poscan->offset = BTREE_PAGE_LOCATOR_GET_OFFSET(int_page_ptr, &scan->intLoc);
-		ParallelSpinLockRelease(scan, &poscan->intpage_access);
-
-		return true;
-	}
-	else /* end int page */
-	{
-		if(poscan)
 			elog(WARNING, "worker %d cleared intpage %d, offset %d", scan->worker_number, poscan->cur_int_pageno, poscan->offset);
-		intpage_set_loaded(scan, false);
-		ParallelSpinLockRelease(scan, &poscan->intpage_access);
+			scan->poscan->int_page[0].loaded = false;
+			SpinLockRelease(&poscan->intpage_access);
 
-		return false;
+			return false;
+		}
+	}
+	else
+	{
+		/* Try to load next internal page if needed */
+		if (!scan->intpage_loaded)
+		{
+			if (!load_next_internal_page(scan, scan->context.img))
+			{
+				/* first page only */
+				Assert(O_PAGE_IS(scan->context.img, LEFTMOST));
+				scan->single_leaf_page_rel = true;
+				clear_fixed_key(int_lokey);
+				clear_fixed_key(int_hikey);
+				return false;
+			}
+			else
+				scan->intpage_loaded = true;
+		}
+
+		if (BTREE_PAGE_LOCATOR_IS_VALID(scan->context.img, &scan->intLoc)) /* inside int page */
+		{
+			get_current_downlink_key(scan, int_lokey, downlink, scan->context.img);
+
+			/* construct fixed hikey of internal item and get next internal locator*/
+			get_next_key(scan, &scan->intLoc, int_hikey, scan->context.img);
+
+			return true;
+		}
+		else /* end int page */
+		{
+			scan->intpage_loaded = false;
+			return false;
+		}
 	}
 }
 
