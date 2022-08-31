@@ -525,6 +525,9 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 					 O_PAGE_IS(poscan->intPage[0].img, RIGHTMOST) ? " RIGHTMOST" : "", poscan->offset);
 			}
 
+			if(poscan->isSingleLeafPage)
+				return false;
+
 			/* Get locator from shared state internal item page offset */
 			BTREE_PAGE_OFFSET_GET_LOCATOR(poscan->intPage[0].img, poscan->offset, &scan->intLoc);
 			elog(DEBUG3, "Worker %d get page %d, offset %d, item %s", scan->workerNumber, poscan->cur_int_pageno, poscan->offset, 
@@ -536,7 +539,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 				if(O_TUPLE_IS_NULL(poscan->prevHikey.fixed.tuple))
 					clear_fixed_key(&scan->prevHikey);
 				else
-					scan->prevHikey.tuple.data = &poscan->prevHikey.fixed.fixedData;
+					scan->prevHikey.tuple.data = (Pointer) &poscan->prevHikey.fixed.fixedData;
 
 				get_current_downlink_key(scan, keyRangeLow, downlink, poscan->intPage[0].img);
 				/* Get next internal page locator and next internal item hikey */
@@ -760,7 +763,6 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 				checkpointNumberAfter;
 	bool		checkpointConcurrent;
 	BTreeMetaPage *metaPageBlkno = BTREE_GET_META(desc);
-	int 		workers_loaded = 0;
 
 	if(poscan)
 	{
@@ -779,6 +781,11 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 		SpinLockRelease(&poscan->workerStart);
 
 		elog(DEBUG3, "make_btree_seq_scan_internal. %s %d started", poscan ? "Parallel worker" : "Worker", scan->workerNumber);
+	}
+	else
+	{
+		scan->workerNumber = -1;
+		scan->isLeader = true;
 	}
 
 	scan->poscan = poscan;
@@ -1357,10 +1364,15 @@ seq_scans_cleanup(void)
 	while (!dlist_is_empty(&listOfScans))
 	{
 		BTreeSeqScan *scan = dlist_head_element(BTreeSeqScan, listNode, &listOfScans);
-		BTreeMetaPage *metaPageBlkno = BTREE_GET_META(scan->desc);
+		BTreeMetaPage *metaPageBlkno;
 
-		(void) pg_atomic_fetch_sub_u32(&metaPageBlkno->numSeqScans[scan->checkpointNumber % NUM_SEQ_SCANS_ARRAY_SIZE], 1);
+		/* TODO cleanup after parallel scan */
+		if (!scan->poscan)
+		{
+			metaPageBlkno = BTREE_GET_META(scan->desc);
 
+			(void) pg_atomic_fetch_sub_u32(&metaPageBlkno->numSeqScans[scan->checkpointNumber % NUM_SEQ_SCANS_ARRAY_SIZE], 1);
+		}
 		dlist_delete(&scan->listNode);
 		pfree(scan);
 	}

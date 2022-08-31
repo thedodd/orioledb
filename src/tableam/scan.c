@@ -122,9 +122,9 @@ static CustomExecMethods o_scan_exec_methods =
 	o_rescan_custom_scan,
 	NULL,
 	NULL,
-	orioledb_parallelscan_estimate,
-	orioledb_parallelscan_initialize,
-	orioledb_parallelscan_reinitialize,
+	NULL,
+	NULL,
+	NULL,
 	NULL,
 	NULL,
 	o_explain_custom_scan
