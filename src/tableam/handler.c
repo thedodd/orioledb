@@ -1098,7 +1098,7 @@ orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
 	SpinLockInit(&poscan->intpageAccess);
 	SpinLockInit(&poscan->workerStart);
 	SpinLockInit(&poscan->intpageLoading);
-	clear_fixed_key(&poscan->prevHikey.fixed);
+	clear_fixed_key(&poscan->intPage[0].prevHikey.fixed);
 	poscan->isSingleLeafPage = false;
 	poscan->offset = 0;
 	poscan->leaderStarted = false;
