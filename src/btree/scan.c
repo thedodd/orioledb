@@ -257,7 +257,7 @@ int_page_hikey(BTreeSeqScan *scan, Page page)
  * a page in a shared state and updating prevHikey.
  */
 static bool
-load_next_internal_page(BTreeSeqScan *scan, Page page)
+load_next_internal_page(BTreeSeqScan *scan, Page page, OFixedShmemKey *prevHikey)
 {
 	bool		has_next = false;
 
@@ -282,7 +282,7 @@ load_next_internal_page(BTreeSeqScan *scan, Page page)
 	{
 		Assert(scan->poscan);
 		memcpy(page, scan->context.img, ORIOLEDB_BLCKSZ);
-		copy_fixed_shmem_key(scan->desc, &scan->poscan->prevHikey, scan->prevHikey.tuple);
+		copy_fixed_shmem_key(scan->desc, prevHikey, scan->prevHikey.tuple);
 	}
 
 	if (PAGE_GET_LEVEL(page) == 1)
@@ -458,7 +458,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 			/* Try to load next internal page if needed */
 			if (!pageIsLoaded)
 			{
-				if (!load_next_internal_page(scan, scan->context.img))
+				if (!load_next_internal_page(scan, scan->context.img, NULL))
 				{
 					/* first page only */
 					Assert(O_PAGE_IS(scan->context.img, LEFTMOST));
@@ -498,7 +498,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 			/* Try to load next internal page if needed */
 			if (!pageIsLoaded)
 			{
-				if (!load_next_internal_page(scan, poscan->intPage[0].img))
+				if (!load_next_internal_page(scan, poscan->intPage[0].img, &poscan->intPage[0].prevHikey))
 				{
 					elog(DEBUG3, "Got single leaf page in parallel scan");
 
@@ -536,10 +536,10 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 			if (BTREE_PAGE_LOCATOR_IS_VALID(poscan->intPage[0].img, &scan->intLoc)) /* inside int page */
 			{
 				/* Fetch previous page hikey from shared state */
-				if(O_TUPLE_IS_NULL(poscan->prevHikey.fixed.tuple))
+				if(O_TUPLE_IS_NULL(poscan->intPage[0].prevHikey.fixed.tuple))
 					clear_fixed_key(&scan->prevHikey);
 				else
-					scan->prevHikey.tuple.data = (Pointer) &poscan->prevHikey.fixed.fixedData;
+					scan->prevHikey.tuple.data = (Pointer) &poscan->intPage[0].prevHikey.fixed.fixedData;
 
 				get_current_downlink_key(scan, keyRangeLow, downlink, poscan->intPage[0].img);
 				/* Get next internal page locator and next internal item hikey */
