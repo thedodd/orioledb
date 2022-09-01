@@ -159,13 +159,13 @@ typedef BTreeIntPageParallelData *BTreeIntPageParallel;
 typedef struct ParallelOScanDescData
 {
 	ParallelTableScanDescData 	phs_base;			/* Shared AM-independent state for parallel table scan */
+	BTreeIntPageParallelData 	intPage[1];
 	slock_t 					intpageAccess;
 	slock_t 					workerStart;		/* for sequential workers joining */
 	slock_t						intpageLoading;		/* for sequential internal page loading */
 	int 						offset;				/* current offset on internal page */
 	OFixedShmemKey 				prevHikey;			/* low key of current level1 page loaded to shared state */
 	bool 						isSingleLeafPage;	/* relation contains only single leaf page */
-	BTreeIntPageParallelData 	intPage[1];
 	bool 						leaderStarted;
 	bool 						firstPageIsLoaded;
 // 	TODO implement shared downlinks storage
