@@ -159,6 +159,15 @@ typedef struct BTreeIntPageParallelData
 
 typedef BTreeIntPageParallelData *BTreeIntPageParallel;
 
+#define O_PARALLEL_LEADER_STARTED		1
+#define O_PARALLEL_FIRST_PAGE_LOADED	1<<1
+#define O_PARALLEL_IS_SINGLE_LEAF_PAGE  1<<2
+#define O_PARALLEL_CURRENT_PAGE			1<<3	/* If set then current internal page in intPage[1], otherwise in intPage[0] */
+#define O_PARALLEL_NEXT_PAGE			1<<4	/* If set then next internal page in intPage[1], otherwise in intPage[0] */
+
+#define CUR_PAGE  	(poscan->flags & O_PARALLEL_CURRENT_PAGE) == 0 ? 0 : 1
+#define NEXT_PAGE 	(poscan->flags & O_PARALLEL_NEXT_PAGE) == 0 ? 0 : 1
+
 typedef struct ParallelOScanDescData
 {
 	ParallelTableScanDescData 	phs_base;			/* Shared AM-independent state for parallel table scan */
@@ -167,11 +176,7 @@ typedef struct ParallelOScanDescData
 	slock_t 					workerStart;		/* for sequential workers joining */
 	slock_t						intpageLoading;		/* for sequential internal page loading */
 	OffsetNumber 				offset;				/* current offset on internal page */
-	int 						cur,				/* number of intPage slot with internal page currently processing */
-								next;				/* number of intPage slot with next prefetched internal page */
-	bool 						isSingleLeafPage;	/* relation contains only single leaf page */
-	bool 						leaderStarted;
-	bool 						firstPageIsLoaded;
+	bits8						flags;
 // 	TODO implement shared downlinks storage
 //	int64                                    downlinkIndex;
 //	BTreeSeqScanDiskDownlink         diskDownlinks[FLEXIBLE_ARRAY_MEMBER];
