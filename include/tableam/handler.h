@@ -150,9 +150,11 @@ extern void orioledb_parallelscan_reinitialize(Relation rel, ParallelTableScanDe
 
 typedef struct BTreeIntPageParallelData
 {
-	char                            img[ORIOLEDB_BLCKSZ];
-	OFixedShmemKey              	prevHikey;		/* low key of current level1 page loaded to shared state */
-	bool                            loaded; /* now unused */
+	char                            img[ORIOLEDB_BLCKSZ]; 	/* internal page image */
+	OFixedShmemKey              	prevHikey;				/* low key of internal page */
+	OffsetNumber					startOffset;			/* first offset on internal page */
+	bool                            loaded;
+	int 							pageno;					/* debug only */
 } BTreeIntPageParallelData;
 
 typedef BTreeIntPageParallelData *BTreeIntPageParallel;
@@ -160,11 +162,13 @@ typedef BTreeIntPageParallelData *BTreeIntPageParallel;
 typedef struct ParallelOScanDescData
 {
 	ParallelTableScanDescData 	phs_base;			/* Shared AM-independent state for parallel table scan */
-	BTreeIntPageParallelData 	intPage[1];
+	BTreeIntPageParallelData 	intPage[2];
 	slock_t 					intpageAccess;
 	slock_t 					workerStart;		/* for sequential workers joining */
 	slock_t						intpageLoading;		/* for sequential internal page loading */
-	int 						offset;				/* current offset on internal page */
+	OffsetNumber 				offset;				/* current offset on internal page */
+	int 						cur,				/* number of intPage slot with internal page currently processing */
+								next;				/* number of intPage slot with next prefetched internal page */
 	bool 						isSingleLeafPage;	/* relation contains only single leaf page */
 	bool 						leaderStarted;
 	bool 						firstPageIsLoaded;
