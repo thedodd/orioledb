@@ -1099,11 +1099,17 @@ orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
 	SpinLockInit(&poscan->workerStart);
 	SpinLockInit(&poscan->intpageLoading);
 	clear_fixed_key(&poscan->intPage[0].prevHikey.fixed);
+	clear_fixed_key(&poscan->intPage[1].prevHikey.fixed);
+	poscan->intPage[0].loaded = false;
+	poscan->intPage[1].loaded = false;
+	poscan->cur = 0;
+	poscan->next = 1;
 	poscan->isSingleLeafPage = false;
 	poscan->offset = 0;
 	poscan->leaderStarted = false;
 	poscan->firstPageIsLoaded = false;
 	memset(poscan->intPage[0].img, 0, ORIOLEDB_BLCKSZ);
+	memset(poscan->intPage[1].img, 0, ORIOLEDB_BLCKSZ);
 	poscan->cur_int_pageno = 0;
 	memset(poscan->worker_active, 0, sizeof(poscan->worker_active));
 
