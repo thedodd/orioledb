@@ -538,6 +538,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 												&poscan->intPage[CUR_PAGE].prevHikey,
 												poscan->intPage[CUR_PAGE].img,
 												&poscan->intPage[CUR_PAGE].startOffset);
+					poscan->intPage[CUR_PAGE].imgReadCsn = scan->context.imgReadCsn;
 					if (!poscan->intPage[CUR_PAGE].loaded)
 					{
 						if(O_PAGE_IS(poscan->intPage[CUR_PAGE].img, LEFTMOST))
@@ -565,6 +566,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 												&poscan->intPage[NEXT_PAGE].prevHikey,
 												poscan->intPage[NEXT_PAGE].img,
 												&poscan->intPage[NEXT_PAGE].startOffset);
+					poscan->intPage[NEXT_PAGE].imgReadCsn = scan->context.imgReadCsn;
 					if(poscan->intPage[NEXT_PAGE].loaded)
 					{
 #ifdef USE_ASSERT_CHECKING
@@ -582,6 +584,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 				}
 
 				/* Push offset for new loaded page into shared state */
+				scan->context.imgReadCsn = poscan->intPage[CUR_PAGE].imgReadCsn;
 				scan->intStartOffset = poscan->intPage[CUR_PAGE].startOffset;
 				poscan->offset = poscan->intPage[CUR_PAGE].startOffset;
 				elog(DEBUG3, "Worker %d loaded intpage, page %d%s%s from slot %d, offset %d", scan->workerNumber,

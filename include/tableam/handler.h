@@ -155,6 +155,7 @@ typedef struct BTreeIntPageParallelData
 	OffsetNumber					startOffset;			/* first offset on internal page */
 	bool                            loaded;
 	int 							pageno;					/* debug only */
+	CommitSeqNo 					imgReadCsn;
 } BTreeIntPageParallelData;
 
 typedef BTreeIntPageParallelData *BTreeIntPageParallel;
