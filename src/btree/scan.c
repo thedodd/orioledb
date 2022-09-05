@@ -515,12 +515,13 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 	{
 		bool pageIsLoaded = is_first_page_loaded(scan);
 
-		SpinLockAcquire(&poscan->intpageAccess);
 		while (true)
 		{
 			/* Try to load next internal page if needed */
 			if (!pageIsLoaded)
 			{
+				SpinLockAcquire(&poscan->intpageAccess);
+				SpinLockAcquire(&poscan->intpageLoad);
 				if (poscan->intPage[NEXT_PAGE].loaded)
 				{
 					/*
@@ -545,6 +546,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 							elog(DEBUG3, "Got single leaf page in parallel scan");
 							poscan->flags |= O_PARALLEL_IS_SINGLE_LEAF_PAGE;
 							SpinLockRelease(&poscan->intpageAccess);
+							SpinLockRelease(&poscan->intpageLoad);
 							clear_fixed_key(keyRangeLow);
 							clear_fixed_key(keyRangeHigh);
 							return false;
@@ -555,6 +557,22 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 					}
 					print_debug_page_loaded(scan, CUR_PAGE, 1);
 				}
+
+				if (scan->iter)
+				{
+					SpinLockRelease(&poscan->intpageAccess);
+					SpinLockRelease(&poscan->intpageLoad);
+					return false;
+				}
+
+				/* Push offset for new loaded page into shared state */
+				scan->intStartOffset = poscan->intPage[CUR_PAGE].startOffset;
+				poscan->offset = poscan->intPage[CUR_PAGE].startOffset;
+				elog(DEBUG3, "Worker %d loaded intpage, page %d%s%s from slot %d, offset %d", scan->workerNumber,
+					 poscan->intPage[CUR_PAGE].pageno,
+					 O_PAGE_IS(poscan->intPage[CUR_PAGE].img, LEFTMOST) ? " LEFTMOST" : "",
+					 O_PAGE_IS(poscan->intPage[CUR_PAGE].img, RIGHTMOST) ? " RIGHTMOST" : "", CUR_PAGE, poscan->offset);
+				SpinLockRelease(&poscan->intpageAccess);
 
 				if (!poscan->intPage[NEXT_PAGE].loaded && !O_PAGE_IS(poscan->intPage[CUR_PAGE].img, RIGHTMOST))
 				{
@@ -574,22 +592,10 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 						print_debug_page_loaded(scan, NEXT_PAGE, 2);
 					}
 				}
-
-				if (scan->iter)
-				{
-					SpinLockRelease(&poscan->intpageAccess);
-					return false;
-				}
-
-				/* Push offset for new loaded page into shared state */
-				scan->intStartOffset = poscan->intPage[CUR_PAGE].startOffset;
-				poscan->offset = poscan->intPage[CUR_PAGE].startOffset;
-				elog(DEBUG3, "Worker %d loaded intpage, page %d%s%s from slot %d, offset %d", scan->workerNumber,
-					 poscan->intPage[CUR_PAGE].pageno,
-					 O_PAGE_IS(poscan->intPage[CUR_PAGE].img, LEFTMOST) ? " LEFTMOST" : "",
-					 O_PAGE_IS(poscan->intPage[CUR_PAGE].img, RIGHTMOST) ? " RIGHTMOST" : "", CUR_PAGE, poscan->offset);
+				SpinLockRelease(&poscan->intpageLoad);
 			}
 
+			SpinLockAcquire(&poscan->intpageAccess);
 			if(poscan->flags & O_PARALLEL_IS_SINGLE_LEAF_PAGE)
 				return false;
 
@@ -620,6 +626,8 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 				return true;
 			}
 
+			/* End of page */
+
 			if (O_PAGE_IS(poscan->intPage[CUR_PAGE].img, RIGHTMOST))
 			{
 				SpinLockRelease(&poscan->intpageAccess);
@@ -630,10 +638,11 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 				return false;
 			}
 
-			pageIsLoaded = false; 							/* Try to load next page */
+			pageIsLoaded = false; 						/* Try to load next page */
 			poscan->intPage[CUR_PAGE].loaded = false;	/* Mark shared page slot as free */
 			elog(DEBUG3, "Worker %d completed int page %d in slot %d", scan->workerNumber,
 				 poscan->intPage[CUR_PAGE].pageno, CUR_PAGE);
+			SpinLockRelease(&poscan->intpageAccess);
 		}
 	}
 }
