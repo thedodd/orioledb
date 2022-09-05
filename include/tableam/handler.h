@@ -175,7 +175,7 @@ typedef struct ParallelOScanDescData
 	BTreeIntPageParallelData 	intPage[2];
 	slock_t 					intpageAccess;
 	slock_t 					workerStart;		/* for sequential workers joining */
-	slock_t						intpageLoading;		/* for sequential internal page loading */
+	slock_t						intpageLoad;		/* for sequential internal page loading */
 	OffsetNumber 				offset;				/* current offset on internal page */
 	bits8						flags;
 // 	TODO implement shared downlinks storage
