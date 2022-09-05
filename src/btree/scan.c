@@ -580,6 +580,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 				}
 
 				/* Push offset for new loaded page into shared state */
+				scan->intStartOffset = poscan->intPage[CUR_PAGE].startOffset;
 				poscan->offset = poscan->intPage[CUR_PAGE].startOffset;
 				elog(DEBUG3, "Worker %d loaded intpage, page %d%s%s from slot %d, offset %d", scan->workerNumber, poscan->intPage[CUR_PAGE].pageno,
 					 O_PAGE_IS(poscan->intPage[CUR_PAGE].img, LEFTMOST) ? " LEFTMOST" : "",
