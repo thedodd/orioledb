@@ -401,6 +401,16 @@ scan_make_iterator(BTreeSeqScan *scan, OTuple keyRangeLow, OTuple keyRangeHigh)
 	scan->iterEnd = keyRangeHigh;
 }
 
+static inline void
+print_debug_page_loaded(BTreeSeqScan *scan, int slot, int custom)
+{
+#ifdef O_PARALLEL_DEBUG
+	scan->poscan->cur_int_pageno++;
+	scan->poscan->intPage[slot].pageno = poscan->cur_int_pageno;
+	elog(DEBUG3, "(%d) Page %d loaded to slot %d", custom, scan->poscan->cur_int_pageno, slot);
+#endif
+}
+
 /* Output item downlink and key using provided page and current locator from BTreeSeqScan */
 static void
 get_current_downlink_key(BTreeSeqScan *scan, OFixedKey *curKey, uint64 *downlink, Page page)
@@ -503,7 +513,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 	/* Parallel sequential scan */
 	else
 	{
-		bool pageIsLoaded = ((poscan->flags & O_PARALLEL_FIRST_PAGE_LOADED) != 0);
+		bool pageIsLoaded = is_first_page_loaded(scan);
 
 		SpinLockAcquire(&poscan->intpageAccess);
 		while (true)
@@ -517,8 +527,8 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 					 * Rotate current page to next prefetched one.
 					 * Next page is not expected to be loaded without current.
 					 */
-					elog(DEBUG3, "Switch current slot %d -> %d", CUR_PAGE, NEXT_PAGE);
 					poscan->flags ^= (O_PARALLEL_CURRENT_PAGE | O_PARALLEL_NEXT_PAGE);
+					elog(DEBUG3, "Switch current slot %d -> %d", CUR_PAGE, NEXT_PAGE);
 				}
 				else
 				{
@@ -533,7 +543,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 						if(O_PAGE_IS(poscan->intPage[CUR_PAGE].img, LEFTMOST))
 						{
 							elog(DEBUG3, "Got single leaf page in parallel scan");
-							poscan->flags |=  O_PARALLEL_IS_SINGLE_LEAF_PAGE;
+							poscan->flags |= O_PARALLEL_IS_SINGLE_LEAF_PAGE;
 							SpinLockRelease(&poscan->intpageAccess);
 							clear_fixed_key(keyRangeLow);
 							clear_fixed_key(keyRangeHigh);
@@ -543,11 +553,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 							elog(ERROR, "Could not load int page into current shared slot %d. Slots: %s:%s", CUR_PAGE,
 									poscan->intPage[0].loaded ? "full" : "empty", poscan->intPage[1].loaded ? "full" : "empty");
 					}
-#ifdef O_PARALLEL_DEBUG
-					poscan->cur_int_pageno++;
-					poscan->intPage[CUR_PAGE].pageno = poscan->cur_int_pageno;
-					elog(DEBUG3, "(1) Page %d loaded to slot %d", poscan->intPage[CUR_PAGE].pageno, CUR_PAGE);
-#endif
+					print_debug_page_loaded(scan, CUR_PAGE, 1);
 				}
 
 				if (!poscan->intPage[NEXT_PAGE].loaded && !O_PAGE_IS(poscan->intPage[CUR_PAGE].img, RIGHTMOST))
@@ -565,11 +571,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 						OTuple curkey = int_page_hikey(scan, poscan->intPage[CUR_PAGE].img);
 						Assert(o_btree_cmp(scan->desc, &poscan->intPage[NEXT_PAGE].prevHikey.fixed.tuple,  BTreeKeyNonLeafKey, &curkey, BTreeKeyNonLeafKey) == 0); 
 #endif
-#ifdef O_PARALLEL_DEBUG
-						poscan->cur_int_pageno++;
-						poscan->intPage[NEXT_PAGE].pageno = poscan->cur_int_pageno;
-						elog(DEBUG3, "(2) Page %d loaded to slot %d", poscan->cur_int_pageno, (bool) poscan->flags & O_PARALLEL_NEXT_PAGE);
-#endif
+						print_debug_page_loaded(scan, NEXT_PAGE, 2);
 					}
 				}
 
@@ -582,7 +584,8 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 				/* Push offset for new loaded page into shared state */
 				scan->intStartOffset = poscan->intPage[CUR_PAGE].startOffset;
 				poscan->offset = poscan->intPage[CUR_PAGE].startOffset;
-				elog(DEBUG3, "Worker %d loaded intpage, page %d%s%s from slot %d, offset %d", scan->workerNumber, poscan->intPage[CUR_PAGE].pageno,
+				elog(DEBUG3, "Worker %d loaded intpage, page %d%s%s from slot %d, offset %d", scan->workerNumber,
+					 poscan->intPage[CUR_PAGE].pageno,
 					 O_PAGE_IS(poscan->intPage[CUR_PAGE].img, LEFTMOST) ? " LEFTMOST" : "",
 					 O_PAGE_IS(poscan->intPage[CUR_PAGE].img, RIGHTMOST) ? " RIGHTMOST" : "", CUR_PAGE, poscan->offset);
 			}
@@ -592,7 +595,8 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 
 			/* Get locator from shared state internal item page offset */
 			BTREE_PAGE_OFFSET_GET_LOCATOR(poscan->intPage[CUR_PAGE].img, poscan->offset, &scan->intLoc);
-			elog(DEBUG3, "Worker %d get page %d, offset %d, item %s", scan->workerNumber, poscan->intPage[CUR_PAGE].pageno, poscan->offset, 
+			elog(DEBUG3, "Worker %d get page %d, offset %d, item %s", scan->workerNumber,
+				 poscan->intPage[CUR_PAGE].pageno, poscan->offset,
 				 BTREE_PAGE_LOCATOR_IS_VALID(poscan->intPage[CUR_PAGE].img, &scan->intLoc) ? "valid" : "invalid");
 
 			if (BTREE_PAGE_LOCATOR_IS_VALID(poscan->intPage[CUR_PAGE].img, &scan->intLoc)) /* inside int page */
@@ -619,15 +623,17 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 			if (O_PAGE_IS(poscan->intPage[CUR_PAGE].img, RIGHTMOST))
 			{
 				SpinLockRelease(&poscan->intpageAccess);
-				elog(DEBUG3, "Worker %d finish int pages at page %d%s%s, offset %d", scan->workerNumber, poscan->intPage[CUR_PAGE].pageno,
+				elog(DEBUG3, "Worker %d finish int pages at page %d%s%s, offset %d", scan->workerNumber,
+					 poscan->intPage[CUR_PAGE].pageno,
 					 O_PAGE_IS(poscan->intPage[CUR_PAGE].img, LEFTMOST) ? " LEFTMOST" : "",
 					 O_PAGE_IS(poscan->intPage[CUR_PAGE].img, RIGHTMOST) ? " RIGHTMOST" : "", poscan->offset);
 				return false;
 			}
 
-			elog(DEBUG3, "Worker %d completed int page %d in slot %d", scan->workerNumber, poscan->intPage[CUR_PAGE].pageno, CUR_PAGE);
 			pageIsLoaded = false; 							/* Try to load next page */
 			poscan->intPage[CUR_PAGE].loaded = false;	/* Mark shared page slot as free */
+			elog(DEBUG3, "Worker %d completed int page %d in slot %d", scan->workerNumber,
+				 poscan->intPage[CUR_PAGE].pageno, CUR_PAGE);
 		}
 	}
 }
@@ -867,7 +873,7 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 	scan->cb = cb;
 	scan->arg = arg;
 	scan->firstPageIsLoaded = false;
-
+	scan->intStartOffset = 0;
 	scan->samplingNumber = 0;
 	scan->sampler = sampler;
 	if (sampler)
