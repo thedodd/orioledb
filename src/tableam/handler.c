@@ -1106,7 +1106,7 @@ orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
 	poscan->intPage[1].loaded = false;
 	poscan->intPage[0].startOffset = 0;
 	poscan->intPage[1].startOffset = 0;
-	poscan->flags = O_PARALLEL_NEXT_PAGE;
+	poscan->flags = 0;
 	poscan->offset = 0;
 	poscan->cur_int_pageno = 0;
 	memset(poscan->worker_active, 0, sizeof(poscan->worker_active));

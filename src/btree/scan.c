@@ -523,11 +523,8 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 			{
 				if (poscan->intPage[NEXT_PAGE].loaded)
 				{
-					/*
-					 * Rotate current page to next prefetched one.
-					 * Next page is not expected to be loaded without current.
-					 */
-					poscan->flags ^= (O_PARALLEL_CURRENT_PAGE | O_PARALLEL_NEXT_PAGE);
+					/* Rotate current page to next prefetched one. */
+					poscan->flags ^= O_PARALLEL_CURRENT_PAGE;
 					elog(DEBUG3, "Switch current slot %d -> %d", CUR_PAGE, NEXT_PAGE);
 				}
 				else

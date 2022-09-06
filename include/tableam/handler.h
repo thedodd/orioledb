@@ -161,13 +161,13 @@ typedef struct BTreeIntPageParallelData
 typedef BTreeIntPageParallelData *BTreeIntPageParallel;
 
 #define O_PARALLEL_LEADER_STARTED		1
-#define O_PARALLEL_FIRST_PAGE_LOADED	1<<1
-#define O_PARALLEL_IS_SINGLE_LEAF_PAGE  1<<2
-#define O_PARALLEL_CURRENT_PAGE			1<<3	/* If set then current internal page in intPage[1], otherwise in intPage[0] */
-#define O_PARALLEL_NEXT_PAGE			1<<4	/* If set then next internal page in intPage[1], otherwise in intPage[0] */
-
+#define O_PARALLEL_FIRST_PAGE_LOADED	(1<<1)
+#define O_PARALLEL_IS_SINGLE_LEAF_PAGE  (1<<2)
+#define O_PARALLEL_CURRENT_PAGE			(1<<3)	/* If set then current internal page is in intPage[1], and next internal
+												 * page is in intPage[0]. If not set - vice versa.
+												 */
 #define CUR_PAGE  	(poscan->flags & O_PARALLEL_CURRENT_PAGE) == 0 ? 0 : 1
-#define NEXT_PAGE 	(poscan->flags & O_PARALLEL_NEXT_PAGE) == 0 ? 0 : 1
+#define NEXT_PAGE 	(poscan->flags & O_PARALLEL_CURRENT_PAGE) == 0 ? 1 : 0
 
 typedef struct ParallelOScanDescData
 {
