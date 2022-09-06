@@ -776,7 +776,7 @@ orioledb_shmem_startup(void)
 												 "orioledb B-tree insert context",
 												 ALLOCSET_DEFAULT_SIZES);
 
-	btree_seqscan_context = AllocSetContextCreate(TopMemoryContext,
+	btree_seqscan_context = AllocSetContextCreate(TopTransactionContext,
 												  "orioledb B-tree seqential scans context",
 												  ALLOCSET_DEFAULT_SIZES);
 
