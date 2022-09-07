@@ -403,8 +403,6 @@ scan_make_iterator(BTreeSeqScan *scan, OTuple keyRangeLow, OTuple keyRangeHigh)
 {
 	MemoryContext mctx;
 
-	Assert(false);
-
 	mctx = MemoryContextSwitchTo(scan->mctx);
 	if (!O_TUPLE_IS_NULL(keyRangeLow))
 		scan->iter = o_btree_iterator_create(scan->desc, &keyRangeLow, BTreeKeyNonLeafKey,
@@ -557,11 +555,13 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 		/* Parallel case */
 		while (true)
 		{
-			BTreeIntPageParallelData *curPage = CUR_PAGE(poscan);
-			BTreeIntPageParallelData *nextPage = NEXT_PAGE(poscan);
+			BTreeIntPageParallelData *curPage;
+			BTreeIntPageParallelData *nextPage;
 			BTreePageItemLocator	loc;
 
 			SpinLockAcquire(&poscan->intpageAccess);
+			curPage = CUR_PAGE(poscan);
+			nextPage = NEXT_PAGE(poscan);
 
 			if (poscan->flags & O_PARALLEL_IS_SINGLE_LEAF_PAGE)
 			{
