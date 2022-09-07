@@ -419,16 +419,6 @@ scan_make_iterator(BTreeSeqScan *scan, OTuple keyRangeLow, OTuple keyRangeHigh)
 	scan->iterEnd = keyRangeHigh;
 }
 
-static inline void
-print_debug_page_loaded(BTreeSeqScan *scan, int slot, int custom)
-{
-#ifdef O_PARALLEL_DEBUG
-	scan->poscan->cur_int_pageno++;
-	scan->poscan->intPage[slot].pageno = poscan->cur_int_pageno;
-	elog(DEBUG3, "(%d) Page %d loaded to slot %d", custom, scan->poscan->cur_int_pageno, slot);
-#endif
-}
-
 /* Output item downlink and key using provided page and current locator from BTreeSeqScan */
 static void
 get_current_downlink_key(BTreeSeqScan *scan,
