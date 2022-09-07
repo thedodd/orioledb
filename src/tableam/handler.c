@@ -1098,8 +1098,8 @@ orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
 	SpinLockInit(&poscan->intpageAccess);
 	SpinLockInit(&poscan->workerStart);
 	LWLockInitialize(&poscan->intpageLoad, btreeScanShmem->pageLoadTrancheId);
-	clear_fixed_key(&poscan->intPage[0].prevHikey.fixed);
-	clear_fixed_key(&poscan->intPage[1].prevHikey.fixed);
+	clear_fixed_shmem_key(&poscan->intPage[0].prevHikey);
+	clear_fixed_shmem_key(&poscan->intPage[1].prevHikey);
 	memset(poscan->intPage[0].img, 0, ORIOLEDB_BLCKSZ);
 	memset(poscan->intPage[1].img, 0, ORIOLEDB_BLCKSZ);
 	poscan->intPage[0].status = OParallelScanPageInvalid;

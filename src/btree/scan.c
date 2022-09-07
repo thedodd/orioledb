@@ -334,7 +334,6 @@ load_next_internal_page(BTreeSeqScan *scan,	OTuple prevHikey,
 				get_next_key(scan, locOut, &scan->keyRangeHigh, page_out);
 				elog(DEBUG3, "scan_make_iterator");
 
-				/* FIXME: iterator does find_page(), not good for spinlock */
 				scan_make_iterator(scan, prevHikey, scan->keyRangeHigh.tuple);
 			}
 		}
@@ -403,6 +402,8 @@ static void
 scan_make_iterator(BTreeSeqScan *scan, OTuple keyRangeLow, OTuple keyRangeHigh)
 {
 	MemoryContext mctx;
+
+	Assert(false);
 
 	mctx = MemoryContextSwitchTo(scan->mctx);
 	if (!O_TUPLE_IS_NULL(keyRangeLow))
@@ -563,7 +564,10 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 			SpinLockAcquire(&poscan->intpageAccess);
 
 			if (poscan->flags & O_PARALLEL_IS_SINGLE_LEAF_PAGE)
+			{
+				SpinLockRelease(&poscan->intpageAccess);
 				return false;
+			}
 
 			if (curPage->status == OParallelScanPageInvalid)
 			{
@@ -572,13 +576,16 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 				if (!(poscan->flags & O_PARALLEL_FIRST_PAGE_LOADED))
 				{
 					Assert(nextPage->status == OParallelScanPageInvalid);
-					clean_fixed_shmem_key(&curPage->prevHikey);
+					clear_fixed_shmem_key(&curPage->prevHikey);
 				}
 				else
 				{
 					Assert(nextPage->status != OParallelScanPageInProgress);
 					if (O_PAGE_IS(nextPage->img, RIGHTMOST))
+					{
+						SpinLockRelease(&poscan->intpageAccess);
 						return false;
+					}
 					copy_fixed_shmem_hikey(scan->desc, &curPage->prevHikey, nextPage->img);
 				}
 				curPage->status = OParallelScanPageInProgress;
@@ -586,7 +593,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 				SpinLockRelease(&poscan->intpageAccess);
 
 				loaded = load_next_internal_page(scan,
-												 curPage->prevHikey.fixed.tuple,
+												 fixed_shmem_key_get_tuple(&curPage->prevHikey),
 												 curPage->img,
 												 &loc,
 												 &curPage->startOffset);
@@ -627,7 +634,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 				SpinLockRelease(&poscan->intpageAccess);
 
 				loaded = load_next_internal_page(scan,
-												 nextPage->prevHikey.fixed.tuple,
+												 fixed_shmem_key_get_tuple(&nextPage->prevHikey),
 												 nextPage->img,
 												 &loc,
 												 &nextPage->startOffset);
@@ -647,20 +654,23 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 
 			if (BTREE_PAGE_LOCATOR_IS_VALID(curPage->img, &loc)) /* inside int page */
 			{
-				get_current_downlink_key(scan, &loc, curPage->startOffset, curPage->prevHikey.fixed.tuple, keyRangeLow, downlink, curPage->img);
+				get_current_downlink_key(scan, &loc, curPage->startOffset,
+										 fixed_shmem_key_get_tuple(&curPage->prevHikey),
+										 keyRangeLow, downlink, curPage->img);
 				/* Get next internal page locator and next internal item hikey */
-				get_next_key(scan, &scan->intLoc, keyRangeHigh, curPage->img);
+				get_next_key(scan, &loc, keyRangeHigh, curPage->img);
 
 				/* Push next internal item page offset into shared state */
 				curPage->offset = BTREE_PAGE_LOCATOR_GET_OFFSET(curPage->img, &loc);
+				scan->context.imgReadCsn = curPage->imgReadCsn;
 				SpinLockRelease(&poscan->intpageAccess);
 				return true;
 			}
 			else
 			{
-				SpinLockRelease(&poscan->intpageAccess);
-				
+				curPage->status = OParallelScanPageInvalid;
 				poscan->flags ^= O_PARALLEL_CURRENT_PAGE;
+				SpinLockRelease(&poscan->intpageAccess);
 			}
 		}
 	}
