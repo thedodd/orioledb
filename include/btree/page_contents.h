@@ -363,6 +363,7 @@ extern void copy_fixed_shmem_page_key(BTreeDescr *desc, OFixedShmemKey *dst,
 									  Page p, BTreePageItemLocator *loc);
 extern void copy_fixed_shmem_hikey(BTreeDescr *desc, OFixedShmemKey *dst,
 								   Page p);
+extern void clean_fixed_shmem_key(OFixedShmemKey *dst);
 extern void copy_from_fixed_shmem_key(OFixedKey *dst, OFixedShmemKey *src);
 
 extern OTuple page_get_hikey(Page p);

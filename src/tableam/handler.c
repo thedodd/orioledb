@@ -1097,17 +1097,18 @@ orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
 	poscan->phs_base.phs_syncscan = false; // synchronize_seqscans && !RelationUsesLocalBuffers(rel) && poscan->pos_nblocks > NBuffers / 4;
 	SpinLockInit(&poscan->intpageAccess);
 	SpinLockInit(&poscan->workerStart);
-	SpinLockInit(&poscan->intpageLoad);
+	LWLockInitialize(&poscan->intpageLoad, btreeScanShmem->pageLoadTrancheId);
 	clear_fixed_key(&poscan->intPage[0].prevHikey.fixed);
 	clear_fixed_key(&poscan->intPage[1].prevHikey.fixed);
 	memset(poscan->intPage[0].img, 0, ORIOLEDB_BLCKSZ);
 	memset(poscan->intPage[1].img, 0, ORIOLEDB_BLCKSZ);
-	poscan->intPage[0].loaded = false;
-	poscan->intPage[1].loaded = false;
+	poscan->intPage[0].status = OParallelScanPageInvalid;
+	poscan->intPage[1].status = OParallelScanPageInvalid;
 	poscan->intPage[0].startOffset = 0;
 	poscan->intPage[1].startOffset = 0;
+	poscan->intPage[0].offset = 0;
+	poscan->intPage[1].offset = 0;
 	poscan->flags = 0;
-	poscan->offset = 0;
 	poscan->cur_int_pageno = 0;
 	memset(poscan->worker_active, 0, sizeof(poscan->worker_active));
 

@@ -153,7 +153,8 @@ static ShmemItem shmemItems[] = {
 	{checkpoint_shmem_size, checkpoint_shmem_init},
 	{recovery_shmem_needs, recovery_shmem_init},
 	{o_proc_shmem_needs, o_proc_shmem_init},
-	{ppools_shmem_needs, ppools_shmem_init}
+	{ppools_shmem_needs, ppools_shmem_init},
+	{btree_scan_shmem_needs, btree_scan_init_shmem}
 };
 
 

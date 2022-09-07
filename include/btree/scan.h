@@ -19,6 +19,11 @@
 #include "executor/tuptable.h"
 #include "utils/sampling.h"
 
+typedef struct
+{
+	int		pageLoadTrancheId;
+} BTreeScanShmem;
+
 typedef struct BTreeSeqScan BTreeSeqScan;
 
 typedef struct BTreeSeqScanCallbacks
@@ -27,6 +32,10 @@ typedef struct BTreeSeqScanCallbacks
 	bool		(*getNextKey) (OFixedKey *key, bool inclusive, void *arg);
 } BTreeSeqScanCallbacks;
 
+extern BTreeScanShmem *btreeScanShmem;
+
+extern Size btree_scan_shmem_needs(void);
+extern void btree_scan_init_shmem(Pointer ptr, bool found);
 extern BTreeSeqScan *make_btree_seq_scan(BTreeDescr *desc, CommitSeqNo csn,
 										 void *poscan);
 extern BTreeSeqScan *make_btree_seq_scan_cb(BTreeDescr *desc, CommitSeqNo csn,

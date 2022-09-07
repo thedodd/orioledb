@@ -625,6 +625,7 @@ copy_fixed_shmem_key(BTreeDescr *desc, OFixedShmemKey *dst, OTuple src)
 	if (O_TUPLE_IS_NULL(src))
 	{
 		clear_fixed_key(&dst->fixed);
+		dst->len = 0;
 		return;
 	}
 
@@ -650,6 +651,13 @@ copy_fixed_shmem_hikey(BTreeDescr *desc, OFixedShmemKey *dst, Page p)
 
 	BTREE_PAGE_GET_HIKEY(src, p);
 	copy_fixed_shmem_key(desc, dst, src);
+}
+
+void
+clean_fixed_shmem_key(OFixedShmemKey *dst)
+{
+	clear_fixed_key(&dst->fixed);
+	dst->len = 0;
 }
 
 OTuple

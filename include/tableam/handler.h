@@ -139,6 +139,14 @@ extern Size orioledb_parallelscan_estimate(Relation rel);
 extern Size orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan);
 extern void orioledb_parallelscan_reinitialize(Relation rel, ParallelTableScanDesc pscan);
 
+
+typedef enum
+{
+	OParallelScanPageInvalid,
+	OParallelScanPageValid,
+	OParallelScanPageInProgress
+} OParallelScanPageStatus;
+
 /*
  * Oriole-specific shared state for parallel table scan.
  *
@@ -152,8 +160,9 @@ typedef struct BTreeIntPageParallelData
 {
 	char                            img[ORIOLEDB_BLCKSZ]; 	/* internal page image */
 	OFixedShmemKey              	prevHikey;				/* low key of internal page */
+	OffsetNumber 					offset;
 	OffsetNumber					startOffset;			/* first offset on internal page */
-	bool                            loaded;
+	OParallelScanPageStatus			status;
 	int 							pageno;					/* debug only */
 	CommitSeqNo 					imgReadCsn;
 } BTreeIntPageParallelData;
@@ -166,8 +175,9 @@ typedef BTreeIntPageParallelData *BTreeIntPageParallel;
 #define O_PARALLEL_CURRENT_PAGE			(1<<3)	/* If set then current internal page is in intPage[1], and next internal
 												 * page is in intPage[0]. If not set - vice versa.
 												 */
-#define CUR_PAGE  	(poscan->flags & O_PARALLEL_CURRENT_PAGE) == 0 ? 0 : 1
-#define NEXT_PAGE 	(poscan->flags & O_PARALLEL_CURRENT_PAGE) == 0 ? 1 : 0
+
+#define CUR_PAGE(poscan)	(&(poscan)->intPage[((poscan)->flags & O_PARALLEL_CURRENT_PAGE) ? 0 : 1])
+#define NEXT_PAGE(poscan)	(&(poscan)->intPage[((poscan)->flags & O_PARALLEL_CURRENT_PAGE) ? 1 : 0])
 
 typedef struct ParallelOScanDescData
 {
@@ -175,8 +185,7 @@ typedef struct ParallelOScanDescData
 	BTreeIntPageParallelData 	intPage[2];
 	slock_t 					intpageAccess;
 	slock_t 					workerStart;		/* for sequential workers joining */
-	slock_t						intpageLoad;		/* for sequential internal page loading */
-	OffsetNumber 				offset;				/* current offset on internal page */
+	LWLock						intpageLoad;		/* for sequential internal page loading */
 	bits8						flags;
 // 	TODO implement shared downlinks storage
 //	int64                                    downlinkIndex;
