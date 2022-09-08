@@ -243,33 +243,17 @@ load_next_historical_page(BTreeSeqScan *scan)
 	BTREE_PAGE_LOCATOR_FIRST(scan->histImg, &scan->histLoc);
 }
 
-static inline void
-set_first_page_loaded(BTreeSeqScan *scan)
-{
-	if(scan->poscan)
-		scan->poscan->flags |= O_PARALLEL_FIRST_PAGE_LOADED;
-	else
-		scan->firstPageIsLoaded = true;
-}
-
 /*
- * Loads next internal page.
- *
- * Pointers to a page are provided explicitly to make function compatible with parallel or plain seqscan.
+ * Loads next internal page and. Outputs page, start locator and offset.
+ *.
  * In case of parallel scan the caller should hold a lock preventing the other workers from modifying
  * a page in a shared state and updating prevHikey.
- *
- * page_in is provided to get hikey from it, it is not modified. Result page is loaded to page_out.
- * They could provided different only in case we prefetch next page into another image than prevoius.
- * startOffset could be output explicitly for the same purpose to be tracked on per-page basis.
- *
- * In cases that don't need prefetch provide same page_in and page_out and ignore startOffsetOut.
  */
 static bool
 load_next_internal_page(BTreeSeqScan *scan,	OTuple prevHikey,
-						Page page_out,
-						BTreePageItemLocator *locOut,
-						OffsetNumber *startOffsetOut)
+						Page page,
+						BTreePageItemLocator *intLoc,
+						OffsetNumber *startOffset)
 {
 	bool		has_next = false;
 
@@ -281,29 +265,33 @@ load_next_internal_page(BTreeSeqScan *scan,	OTuple prevHikey,
 	else
 		find_page(&scan->context, NULL, BTreeKeyNone, 1);
 
-	set_first_page_loaded(scan);
-
-	/* In case of parallel scan copy page image into shared state and update previous shared state page Hikey */
-	if (page_out != scan->context.img)
+	/* In case of parallel scan copy page image into shared state */
+	if (page != scan->context.img)
 	{
 		Assert(scan->poscan);
-		memcpy(page_out, scan->context.img, ORIOLEDB_BLCKSZ);
+		scan->poscan->flags |= O_PARALLEL_FIRST_PAGE_LOADED;
+		memcpy(page, scan->context.img, ORIOLEDB_BLCKSZ);
+	}
+	else
+	{
+		Assert(!scan->poscan);
+		scan->firstPageIsLoaded = true;
 	}
 
-	if (PAGE_GET_LEVEL(page_out) == 1)
+	if (PAGE_GET_LEVEL(page) == 1)
 	{
 		/*
 		 * Check if the left bound of the found keyrange corresponds to the
 		 * previous hikey.  Otherwise, use iterator to correct the situation.
 		 */
-		*locOut = scan->context.items[scan->context.index].locator;
-		*startOffsetOut = BTREE_PAGE_LOCATOR_GET_OFFSET(page_out, locOut);
+		*intLoc = scan->context.items[scan->context.index].locator;
+		*startOffset = BTREE_PAGE_LOCATOR_GET_OFFSET(page, intLoc);
 		if (!O_TUPLE_IS_NULL(prevHikey))
 		{
 			OTuple		intTup;
 
-			if (*startOffsetOut > 0)
-				BTREE_PAGE_READ_INTERNAL_TUPLE(intTup, page_out, locOut);
+			if (*startOffset > 0)
+				BTREE_PAGE_READ_INTERNAL_TUPLE(intTup, page, intLoc);
 			else
 				intTup = scan->context.lokey.tuple;
 
@@ -311,7 +299,7 @@ load_next_internal_page(BTreeSeqScan *scan,	OTuple prevHikey,
 							&prevHikey, BTreeKeyNonLeafKey,
 							&intTup, BTreeKeyNonLeafKey) != 0)
 			{
-				get_next_key(scan, locOut, &scan->keyRangeHigh, page_out);
+				get_next_key(scan, intLoc, &scan->keyRangeHigh, page);
 				elog(DEBUG3, "scan_make_iterator");
 
 				scan_make_iterator(scan, prevHikey, scan->keyRangeHigh.tuple);
@@ -321,8 +309,8 @@ load_next_internal_page(BTreeSeqScan *scan,	OTuple prevHikey,
 	}
 	else
 	{
-		Assert(PAGE_GET_LEVEL(page_out) == 0);
-		memcpy(scan->leafImg, page_out, ORIOLEDB_BLCKSZ);
+		Assert(PAGE_GET_LEVEL(page) == 0);
+		memcpy(scan->leafImg, page, ORIOLEDB_BLCKSZ);
 		BTREE_PAGE_LOCATOR_FIRST(scan->leafImg, &scan->leafLoc);
 		scan->hint.blkno = scan->context.items[0].blkno;
 		scan->hint.pageChangeCount = scan->context.items[0].pageChangeCount;
@@ -399,13 +387,13 @@ scan_make_iterator(BTreeSeqScan *scan, OTuple keyRangeLow, OTuple keyRangeHigh)
 	scan->iterEnd = keyRangeHigh;
 }
 
-/* Output item downlink and key using provided page and current locator from BTreeSeqScan */
+/* Output item downlink and key using provided page and current locator */
 static void
 get_current_downlink_key(BTreeSeqScan *scan,
 						 BTreePageItemLocator *loc,
 						 OffsetNumber startOffset,
 						 OTuple prevHiKey,
-						 OFixedKey *outCurKey,
+						 OFixedKey *curKey,
 						 uint64 *downlink,
 						 Page page)
 {
@@ -420,17 +408,17 @@ get_current_downlink_key(BTreeSeqScan *scan,
 
 	if (BTREE_PAGE_LOCATOR_GET_OFFSET(page, loc) != startOffset)
 	{
-		copy_fixed_key(scan->desc, outCurKey, tuple);
+		copy_fixed_key(scan->desc, curKey, tuple);
 	}
 	else if (!O_PAGE_IS(page, LEFTMOST))
 	{
 		Assert(!O_TUPLE_IS_NULL(prevHiKey));
-		copy_fixed_key(scan->desc, outCurKey, prevHiKey);
+		copy_fixed_key(scan->desc, curKey, prevHiKey);
 	}
 	else
 	{
 		Assert(O_TUPLE_IS_NULL(prevHiKey));
-		clear_fixed_key(outCurKey);
+		clear_fixed_key(curKey);
 	}
 }
 
