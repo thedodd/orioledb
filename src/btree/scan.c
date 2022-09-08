@@ -252,26 +252,6 @@ set_first_page_loaded(BTreeSeqScan *scan)
 		scan->firstPageIsLoaded = true;
 }
 
-static inline bool
-is_first_page_loaded(BTreeSeqScan *scan)
-{
-	return scan->poscan ? ((scan->poscan->flags & O_PARALLEL_FIRST_PAGE_LOADED) != 0) : scan->firstPageIsLoaded;
-}
-
-static inline OTuple
-int_page_hikey(BTreeSeqScan *scan, Page page)
-{
-	OTuple		res;
-
-	if (is_first_page_loaded(scan) && !O_PAGE_IS(page, RIGHTMOST))
-		return page_get_hikey(page);
-	else
-	{
-		O_TUPLE_SET_NULL(res);
-		return res;
-	}
-}
-
 /*
  * Loads next internal page.
  *
@@ -287,7 +267,7 @@ int_page_hikey(BTreeSeqScan *scan, Page page)
  */
 static bool
 load_next_internal_page(BTreeSeqScan *scan,	OTuple prevHikey,
-						Page page_out, 
+						Page page_out,
 						BTreePageItemLocator *locOut,
 						OffsetNumber *startOffsetOut)
 {
@@ -494,14 +474,10 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 			/* Try to load next internal page if needed */
 			if (!pageIsLoaded)
 			{
-				if (!O_TUPLE_IS_NULL(int_page_hikey(scan, scan->context.img)))
+				if (scan->firstPageIsLoaded)
 				{
-					copy_fixed_key(scan->desc, &scan->prevHikey,
-								   int_page_hikey(scan, scan->context.img));
-				}
-				else
-				{
-					clear_fixed_key(&scan->prevHikey);
+					Assert(!O_PAGE_IS(scan->context.img, RIGHTMOST));
+					copy_fixed_hikey(scan->desc, &scan->prevHikey, scan->context.img);
 				}
 
 				if (!load_next_internal_page(scan, scan->prevHikey.tuple,
@@ -605,7 +581,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 					return false;
 				continue;
 			}
-			else if (CUR_PAGE(poscan)->status == OParallelScanPageInProgress)
+			else if (curPage->status == OParallelScanPageInProgress)
 			{
 				SpinLockRelease(&poscan->intpageAccess);
 				if (LWLockAcquireOrWait(&poscan->intpageLoad, LW_EXCLUSIVE))
