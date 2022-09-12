@@ -120,6 +120,7 @@ struct BTreeSeqScan
 	ParallelOScanDesc 	poscan;
 	bool 				isLeader;
 	int 				workerNumber;
+	dsm_segment    	   *dsmSeg;
 };
 
 static dlist_head listOfScans = DLIST_STATIC_INIT(listOfScans);
@@ -143,10 +144,16 @@ btree_scan_init_shmem(Pointer ptr, bool found)
 	if (!found)
 	{
 		btreeScanShmem->pageLoadTrancheId = LWLockNewTrancheId();
+		btreeScanShmem->downlinksSubscribeTrancheId = LWLockNewTrancheId();
+		btreeScanShmem->downlinksPublishTrancheId = LWLockNewTrancheId();
 	}
 
 	LWLockRegisterTranche(btreeScanShmem->pageLoadTrancheId,
 						  "OBTreeScanPageLoadTrancheId");
+	LWLockRegisterTranche(btreeScanShmem->downlinksSubscribeTrancheId,
+						  "OBTreeScanDownlinksSubscribeTrancheId");
+	LWLockRegisterTranche(btreeScanShmem->downlinksPublishTrancheId,
+						  "OBTreeScanDownlinksPublishTrancheId");
 }
 
 
@@ -353,12 +360,94 @@ cmp_downlinks(const void *p1, const void *p2)
 static void
 switch_to_disk_scan(BTreeSeqScan *scan)
 {
+	ParallelOScanDesc poscan = scan->poscan;
+	bool 			  diskLeader = false;
+
 	scan->status = BTreeSeqScanDisk;
 	BTREE_PAGE_LOCATOR_SET_INVALID(&scan->leafLoc);
-	qsort(scan->diskDownlinks,
-		  scan->downlinksCount,
-		  sizeof(scan->diskDownlinks[0]),
-		  cmp_downlinks);
+	if (!poscan)
+		qsort(scan->diskDownlinks,
+			  scan->downlinksCount,
+			  sizeof(scan->diskDownlinks[0]),
+			  cmp_downlinks);
+	else
+	{
+		SpinLockAcquire(&poscan->workerStart);
+		if (!(poscan->flags & O_PARALLEL_DISK_SCAN_STARTED))
+		{
+			poscan->flags |= O_PARALLEL_DISK_SCAN_STARTED;
+			diskLeader = true;
+			LWLockAcquire(&poscan->downlinksPublish, LW_EXCLUSIVE);
+			LWLockAcquire(&poscan->downlinksSubscribe, LW_EXCLUSIVE);
+		}
+		SpinLockRelease(&poscan->workerStart);
+
+		/* Publish the number of downlinks */
+		SpinLockAcquire(&poscan->downlinksCalc);
+		poscan->downlinksCount += scan->downlinksCount;
+		poscan->workersReportedCount++;
+		SpinLockRelease(&poscan->downlinksCalc);
+
+		if (diskLeader)
+		{
+			SpinDelayStatus status;
+
+			/* Wait until all workers publish their number of downlinks.*/
+			init_local_spin_delay(&status);
+			while (poscan->workersReportedCount < poscan->nworkers)
+				perform_spin_delay(&status);
+			finish_spin_delay(&status);
+
+			if (poscan->downlinksCount > 0)
+			{
+				/* Create DSM segment and publish downlinks list first*/
+				scan->dsmSeg = dsm_create(MAXALIGN(poscan->downlinksCount * sizeof(BTreeSeqScanDiskDownlink)), 0);
+				poscan->dsmHandle = dsm_segment_handle(scan->dsmSeg);
+
+				poscan->workersPublishedDownlinks++;
+				if(scan->downlinksCount > 0)
+				{
+					memcpy((char *)dsm_segment_address(scan->dsmSeg),
+							scan->diskDownlinks, scan->downlinksCount * sizeof(BTreeSeqScanDiskDownlink));
+					poscan->downlinksIndex += scan->downlinksCount;
+				}
+				LWLockRelease(&poscan->downlinksPublish);
+
+				/* Wait until the other workers have published their downlinks lists */
+				init_local_spin_delay(&status);
+				while (poscan->workersPublishedDownlinks < poscan->nworkers)
+					perform_spin_delay(&status);
+				finish_spin_delay(&status);
+
+				qsort(dsm_segment_address(scan->dsmSeg), poscan->downlinksCount,
+					  sizeof(scan->diskDownlinks[0]), cmp_downlinks);
+			}
+			else
+				LWLockRelease(&poscan->downlinksPublish);
+
+			LWLockRelease(&poscan->downlinksSubscribe);
+			/* Now workers can get downlinks from shared sorted list */
+		}
+		else
+		{
+			/* Publish the number of downlinks */
+			SpinLockAcquire(&poscan->downlinksCalc);
+			poscan->downlinksCount += scan->downlinksCount;
+			poscan->workersReportedCount++;
+			SpinLockRelease(&poscan->downlinksCalc);
+
+			LWLockAcquire(&poscan->downlinksPublish, LW_EXCLUSIVE);
+			poscan->workersPublishedDownlinks++;
+			if(scan->downlinksCount > 0)
+			{
+				scan->dsmSeg = dsm_attach(poscan->dsmHandle);
+				memcpy((char *)dsm_segment_address(scan->dsmSeg) + poscan->downlinksIndex * sizeof(BTreeSeqScanDiskDownlink),
+				scan->diskDownlinks, scan->downlinksCount * sizeof(BTreeSeqScanDiskDownlink));
+				poscan->downlinksIndex += scan->downlinksCount;
+			}
+		LWLockRelease(&poscan->downlinksPublish);
+		}
+	}
 }
 
 /*
@@ -777,11 +866,28 @@ load_next_disk_leaf_page(BTreeSeqScan *scan)
 	bool		success;
 	BTreePageHeader *header;
 	BTreeSeqScanDiskDownlink downlink;
+	ParallelOScanDesc poscan = scan->poscan;
 
-	if (scan->downlinkIndex >= scan->downlinksCount)
-		return false;
+	if (!poscan)
+	{
+		if (scan->downlinkIndex >= scan->downlinksCount)
+			return false;
 
-	downlink = scan->diskDownlinks[scan->downlinkIndex];
+		downlink = scan->diskDownlinks[scan->downlinkIndex];
+	}
+	else
+	{
+		LWLockAcquire(&poscan->downlinksSubscribe, LW_EXCLUSIVE);
+		if (poscan->downlinksIndex >= poscan->downlinksCount)
+		{
+			LWLockRelease(&poscan->downlinksSubscribe);
+			return false;
+		}
+		downlink = *(BTreeSeqScanDiskDownlink *)((char *)dsm_segment_address(scan->dsmSeg) + poscan->downlinksIndex * sizeof(BTreeSeqScanDiskDownlink));
+		poscan->downlinksIndex++;
+		LWLockRelease(&poscan->downlinksSubscribe);
+	}
+
 	success = read_page_from_disk(scan->desc,
 								  scan->leafImg,
 								  downlink.downlink,
@@ -834,7 +940,7 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 		for (scan->workerNumber = 0; poscan->worker_active[scan->workerNumber] == true; scan->workerNumber++) {}
 
 		poscan->worker_active[scan->workerNumber] = true;
-
+		poscan->nworkers = scan->workerNumber + 1;
 		/* leader */
 		if (scan->workerNumber == 0)
 		{
@@ -859,7 +965,7 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 	scan->allocatedDownlinks = 16;
 	scan->downlinksCount = 0;
 	scan->downlinkIndex = 0;
-	scan->diskDownlinks = (BTreeSeqScanDiskDownlink *) palloc(sizeof(scan->diskDownlinks[0]) * scan->allocatedDownlinks);
+	scan->diskDownlinks = (BTreeSeqScanDiskDownlink *) palloc(sizeof(BTreeSeqScanDiskDownlink) * scan->allocatedDownlinks);
 	scan->mctx = CurrentMemoryContext;
 	scan->iter = NULL;
 	scan->cb = cb;

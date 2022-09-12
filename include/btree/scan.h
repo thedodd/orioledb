@@ -21,7 +21,9 @@
 
 typedef struct
 {
-	int		pageLoadTrancheId;
+	int		pageLoadTrancheId,
+			downlinksSubscribeTrancheId,
+			downlinksPublishTrancheId;
 } BTreeScanShmem;
 
 typedef struct BTreeSeqScan BTreeSeqScan;

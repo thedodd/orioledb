@@ -175,6 +175,7 @@ typedef BTreeIntPageParallelData *BTreeIntPageParallel;
 #define O_PARALLEL_CURRENT_PAGE			(1<<3)	/* If set then current internal page is in intPage[1], and next internal
 												 * page is in intPage[0]. If not set - vice versa.
 												 */
+#define O_PARALLEL_DISK_SCAN_STARTED 	(1<<4)
 
 #define CUR_PAGE(poscan)	(&(poscan)->intPage[((poscan)->flags & O_PARALLEL_CURRENT_PAGE) ? 0 : 1])
 #define NEXT_PAGE(poscan)	(&(poscan)->intPage[((poscan)->flags & O_PARALLEL_CURRENT_PAGE) ? 1 : 0])
@@ -183,14 +184,20 @@ typedef struct ParallelOScanDescData
 {
 	ParallelTableScanDescData 	phs_base;			/* Shared AM-independent state for parallel table scan */
 	BTreeIntPageParallelData 	intPage[2];
-	slock_t 					intpageAccess;
-	slock_t 					workerStart;		/* for sequential workers joining */
-	LWLock						intpageLoad;		/* for sequential internal page loading */
+	slock_t 					intpageAccess,
+								workerStart,		/* for sequential workers joining */
+								downlinksCalc;
+	LWLock						intpageLoad,		/* for sequential internal page loading */
+								downlinksSubscribe, /* workers can get downlinks from shared state */
+								downlinksPublish;	/* workers can put downlinks to shared state */
+	int64						downlinksCount,
+								downlinksIndex;
+	int 						workersReportedCount,
+								workersPublishedDownlinks;
+//	BTreeSeqScanDiskDownlink   *diskDownlinks;
 	bits8						flags;
-// 	TODO implement shared downlinks storage
-//	int64                                    downlinkIndex;
-//	BTreeSeqScanDiskDownlink         diskDownlinks[FLEXIBLE_ARRAY_MEMBER];
-
+	int 						nworkers;
+	dsm_handle					dsmHandle;
 	/* debug only */
 	int							cur_int_pageno;
 	bool 						worker_active[10];
