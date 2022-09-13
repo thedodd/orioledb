@@ -362,7 +362,6 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 {
 	ParallelOScanDesc poscan = scan->poscan;
 	bool 			  diskLeader = false;
-	int64			  downlinksCount PG_USED_FOR_ASSERTS_ONLY;
 
 	scan->status = BTreeSeqScanDisk;
 	BTREE_PAGE_LOCATOR_SET_INVALID(&scan->leafLoc);
@@ -382,7 +381,6 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 			LWLockAcquire(&poscan->downlinksSubscribe, LW_EXCLUSIVE);
 		}
 		/* Publish the number of downlinks */
-		downlinksCount = scan->downlinksCount;
 		poscan->downlinksCount += scan->downlinksCount;
 		poscan->workersReportedCount++;
 		SpinLockRelease(&poscan->workerBeginDisk);
@@ -405,14 +403,9 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 				/* Create DSM segment and publish downlinks list first*/
 				scan->dsmSeg = dsm_create(MAXALIGN(poscan->downlinksCount * sizeof(scan->diskDownlinks[0])), 0);
 				poscan->dsmHandle = dsm_segment_handle(scan->dsmSeg);
-
-				Assert (scan->downlinksCount == downlinksCount);
-				if(scan->downlinksCount > 0)
-				{
-					memcpy((char *)dsm_segment_address(scan->dsmSeg),
-							scan->diskDownlinks, scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
-					poscan->downlinkIndex += scan->downlinksCount;
-				}
+				memcpy((char *)dsm_segment_address(scan->dsmSeg), scan->diskDownlinks,
+						scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
+				poscan->downlinkIndex += scan->downlinksCount;
 				LWLockRelease(&poscan->downlinksPublish);
 
 				/* Wait until the other workers have published their downlinks lists */
@@ -437,13 +430,11 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 		else
 		{
 			LWLockAcquire(&poscan->downlinksPublish, LW_EXCLUSIVE);
-			Assert(scan->downlinksCount == downlinksCount);
 			if (poscan->downlinksCount > 0)
-				scan->dsmSeg = dsm_attach(poscan->dsmHandle);
-			if (scan->downlinksCount > 0)
 			{
+				scan->dsmSeg = dsm_attach(poscan->dsmHandle);
 				memcpy((char *)dsm_segment_address(scan->dsmSeg) + poscan->downlinkIndex * sizeof(scan->diskDownlinks[0]),
-				scan->diskDownlinks, scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
+					   scan->diskDownlinks, scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
 				poscan->downlinkIndex += scan->downlinksCount;
 			}
 			LWLockRelease(&poscan->downlinksPublish);

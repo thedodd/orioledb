@@ -1094,9 +1094,10 @@ orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
 						errmsg("\"%s\" is not a orioledb table", NameStr(rel->rd_rel->relname))));
 
 	poscan->phs_base.phs_relid = RelationGetRelid(rel);
-	poscan->phs_base.phs_syncscan = false; // synchronize_seqscans && !RelationUsesLocalBuffers(rel) && poscan->pos_nblocks > NBuffers / 4;
+	poscan->phs_base.phs_syncscan = false;
 	SpinLockInit(&poscan->intpageAccess);
 	SpinLockInit(&poscan->workerStart);
+	SpinLockInit(&poscan->workerBeginDisk);
 	LWLockInitialize(&poscan->intpageLoad, btreeScanShmem->pageLoadTrancheId);
 	LWLockInitialize(&poscan->downlinksSubscribe, btreeScanShmem->downlinksSubscribeTrancheId);
 	LWLockInitialize(&poscan->downlinksPublish, btreeScanShmem->downlinksPublishTrancheId);
@@ -1113,7 +1114,6 @@ orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
 	poscan->downlinksCount = 0;
 	poscan->downlinkIndex = 0;
 	poscan->workersReportedCount = 0;
-	poscan->workersPublishedDownlinks = 0;
 	poscan->flags = 0;
 	poscan->cur_int_pageno = 0;
 	memset(poscan->worker_active, 0, sizeof(poscan->worker_active));

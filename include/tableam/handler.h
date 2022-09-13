@@ -186,16 +186,13 @@ typedef struct ParallelOScanDescData
 	BTreeIntPageParallelData 	intPage[2];
 	slock_t 					intpageAccess,
 								workerStart,		/* for sequential workers joining */
-								workerBeginDisk,
-								downlinksCalc;
+								workerBeginDisk;	/* for sequential joining to disk read phase */
 	LWLock						intpageLoad,		/* for sequential internal page loading */
-								downlinksSubscribe, /* workers can get downlinks from shared state */
-								downlinksPublish;	/* workers can put downlinks to shared state */
-	int64						downlinksCount,
+								downlinksSubscribe, /* workers can get disk downlinks from shared state */
+								downlinksPublish;	/* workers can put disk downlinks to shared state */
+	int64						downlinksCount,		/* cumulative number of disk downlinks in all workers */
 								downlinkIndex;
-	int 						workersReportedCount,
-								workersPublishedDownlinks;
-//	BTreeSeqScanDiskDownlink   *diskDownlinks;
+	int 						workersReportedCount;	/* number of workers that reported disk downlinks number */
 	bits8						flags;
 	int 						nworkers;
 	dsm_handle					dsmHandle;
