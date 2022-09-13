@@ -192,7 +192,7 @@ typedef struct ParallelOScanDescData
 								downlinksSubscribe, /* workers can get downlinks from shared state */
 								downlinksPublish;	/* workers can put downlinks to shared state */
 	int64						downlinksCount,
-								downlinksIndex;
+								downlinkIndex;
 	int 						workersReportedCount,
 								workersPublishedDownlinks;
 //	BTreeSeqScanDiskDownlink   *diskDownlinks;

@@ -362,6 +362,7 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 {
 	ParallelOScanDesc poscan = scan->poscan;
 	bool 			  diskLeader = false;
+	int64			  downlinksCount PG_USED_FOR_ASSERTS_ONLY;
 
 	scan->status = BTreeSeqScanDisk;
 	BTREE_PAGE_LOCATOR_SET_INVALID(&scan->leafLoc);
@@ -380,13 +381,11 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 			LWLockAcquire(&poscan->downlinksPublish, LW_EXCLUSIVE);
 			LWLockAcquire(&poscan->downlinksSubscribe, LW_EXCLUSIVE);
 		}
-		SpinLockRelease(&poscan->workerBeginDisk);
-
 		/* Publish the number of downlinks */
-		SpinLockAcquire(&poscan->downlinksCalc);
+		downlinksCount = scan->downlinksCount;
 		poscan->downlinksCount += scan->downlinksCount;
 		poscan->workersReportedCount++;
-		SpinLockRelease(&poscan->downlinksCalc);
+		SpinLockRelease(&poscan->workerBeginDisk);
 
 		if (diskLeader)
 		{
@@ -397,26 +396,33 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 			while (poscan->workersReportedCount < poscan->nworkers)
 				perform_spin_delay(&status);
 			finish_spin_delay(&status);
+			/* Make sure all workers released this lock */
+			SpinLockAcquire(&poscan->workerBeginDisk);
+			SpinLockRelease(&poscan->workerBeginDisk);
 
 			if (poscan->downlinksCount > 0)
 			{
 				/* Create DSM segment and publish downlinks list first*/
-				scan->dsmSeg = dsm_create(MAXALIGN(poscan->downlinksCount * sizeof(BTreeSeqScanDiskDownlink)), 0);
+				scan->dsmSeg = dsm_create(MAXALIGN(poscan->downlinksCount * sizeof(scan->diskDownlinks[0])), 0);
 				poscan->dsmHandle = dsm_segment_handle(scan->dsmSeg);
 
+				Assert (scan->downlinksCount == downlinksCount);
 				if(scan->downlinksCount > 0)
 				{
 					memcpy((char *)dsm_segment_address(scan->dsmSeg),
-							scan->diskDownlinks, scan->downlinksCount * sizeof(BTreeSeqScanDiskDownlink));
-					poscan->downlinksIndex += scan->downlinksCount;
+							scan->diskDownlinks, scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
+					poscan->downlinkIndex += scan->downlinksCount;
 				}
 				LWLockRelease(&poscan->downlinksPublish);
 
 				/* Wait until the other workers have published their downlinks lists */
 				init_local_spin_delay(&status);
-				while (poscan->downlinksIndex < poscan->downlinksCount)
+				while (poscan->downlinkIndex < poscan->downlinksCount)
 					perform_spin_delay(&status);
 				finish_spin_delay(&status);
+				/* Make sure all workers released this lock */
+				LWLockAcquire(&poscan->downlinksPublish, LW_EXCLUSIVE);
+				LWLockRelease(&poscan->downlinksPublish);
 
 				qsort(dsm_segment_address(scan->dsmSeg), poscan->downlinksCount,
 					  sizeof(scan->diskDownlinks[0]), cmp_downlinks);
@@ -424,18 +430,20 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 			else
 				LWLockRelease(&poscan->downlinksPublish);
 
+			poscan->downlinkIndex = 0;
 			LWLockRelease(&poscan->downlinksSubscribe);
 			/* Now workers can get downlinks from shared sorted list */
 		}
 		else
 		{
 			LWLockAcquire(&poscan->downlinksPublish, LW_EXCLUSIVE);
+			Assert(scan->downlinksCount == downlinksCount);
 			if(scan->downlinksCount > 0)
 			{
 				scan->dsmSeg = dsm_attach(poscan->dsmHandle);
-				memcpy((char *)dsm_segment_address(scan->dsmSeg) + poscan->downlinksIndex * sizeof(BTreeSeqScanDiskDownlink),
-				scan->diskDownlinks, scan->downlinksCount * sizeof(BTreeSeqScanDiskDownlink));
-				poscan->downlinksIndex += scan->downlinksCount;
+				memcpy((char *)dsm_segment_address(scan->dsmSeg) + poscan->downlinkIndex * sizeof(scan->diskDownlinks[0]),
+				scan->diskDownlinks, scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
+				poscan->downlinkIndex += scan->downlinksCount;
 			}
 			LWLockRelease(&poscan->downlinksPublish);
 		}
@@ -870,13 +878,13 @@ load_next_disk_leaf_page(BTreeSeqScan *scan)
 	else
 	{
 		LWLockAcquire(&poscan->downlinksSubscribe, LW_EXCLUSIVE);
-		if (poscan->downlinksIndex >= poscan->downlinksCount)
+		if (poscan->downlinkIndex >= poscan->downlinksCount)
 		{
 			LWLockRelease(&poscan->downlinksSubscribe);
 			return false;
 		}
-		downlink = *((BTreeSeqScanDiskDownlink *)((char *)dsm_segment_address(scan->dsmSeg) + poscan->downlinksIndex * sizeof(BTreeSeqScanDiskDownlink)));
-		poscan->downlinksIndex++;
+		downlink = *((BTreeSeqScanDiskDownlink *)((char *)dsm_segment_address(scan->dsmSeg) + poscan->downlinkIndex * sizeof(scan->diskDownlinks[0])));
+		poscan->downlinkIndex++;
 		LWLockRelease(&poscan->downlinksSubscribe);
 	}
 
@@ -957,7 +965,7 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 	scan->allocatedDownlinks = 16;
 	scan->downlinksCount = 0;
 	scan->downlinkIndex = 0;
-	scan->diskDownlinks = (BTreeSeqScanDiskDownlink *) palloc(sizeof(BTreeSeqScanDiskDownlink) * scan->allocatedDownlinks);
+	scan->diskDownlinks = (BTreeSeqScanDiskDownlink *) palloc(sizeof(scan->diskDownlinks[0]) * scan->allocatedDownlinks);
 	scan->mctx = CurrentMemoryContext;
 	scan->iter = NULL;
 	scan->cb = cb;

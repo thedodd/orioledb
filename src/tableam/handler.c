@@ -1111,7 +1111,7 @@ orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
 	poscan->intPage[0].offset = 0;
 	poscan->intPage[1].offset = 0;
 	poscan->downlinksCount = 0;
-	poscan->downlinksIndex = 0;
+	poscan->downlinkIndex = 0;
 	poscan->workersReportedCount = 0;
 	poscan->workersPublishedDownlinks = 0;
 	poscan->flags = 0;
