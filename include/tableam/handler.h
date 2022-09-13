@@ -186,6 +186,7 @@ typedef struct ParallelOScanDescData
 	BTreeIntPageParallelData 	intPage[2];
 	slock_t 					intpageAccess,
 								workerStart,		/* for sequential workers joining */
+								workerBeginDisk,
 								downlinksCalc;
 	LWLock						intpageLoad,		/* for sequential internal page loading */
 								downlinksSubscribe, /* workers can get downlinks from shared state */

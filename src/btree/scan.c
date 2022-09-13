@@ -372,7 +372,7 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 			  cmp_downlinks);
 	else
 	{
-		SpinLockAcquire(&poscan->workerStart);
+		SpinLockAcquire(&poscan->workerBeginDisk);
 		if (!(poscan->flags & O_PARALLEL_DISK_SCAN_STARTED))
 		{
 			poscan->flags |= O_PARALLEL_DISK_SCAN_STARTED;
@@ -380,7 +380,7 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 			LWLockAcquire(&poscan->downlinksPublish, LW_EXCLUSIVE);
 			LWLockAcquire(&poscan->downlinksSubscribe, LW_EXCLUSIVE);
 		}
-		SpinLockRelease(&poscan->workerStart);
+		SpinLockRelease(&poscan->workerBeginDisk);
 
 		/* Publish the number of downlinks */
 		SpinLockAcquire(&poscan->downlinksCalc);
@@ -404,7 +404,6 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 				scan->dsmSeg = dsm_create(MAXALIGN(poscan->downlinksCount * sizeof(BTreeSeqScanDiskDownlink)), 0);
 				poscan->dsmHandle = dsm_segment_handle(scan->dsmSeg);
 
-				poscan->workersPublishedDownlinks++;
 				if(scan->downlinksCount > 0)
 				{
 					memcpy((char *)dsm_segment_address(scan->dsmSeg),
@@ -415,7 +414,7 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 
 				/* Wait until the other workers have published their downlinks lists */
 				init_local_spin_delay(&status);
-				while (poscan->workersPublishedDownlinks < poscan->nworkers)
+				while (poscan->downlinksIndex < poscan->downlinksCount)
 					perform_spin_delay(&status);
 				finish_spin_delay(&status);
 
@@ -430,14 +429,7 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 		}
 		else
 		{
-			/* Publish the number of downlinks */
-			SpinLockAcquire(&poscan->downlinksCalc);
-			poscan->downlinksCount += scan->downlinksCount;
-			poscan->workersReportedCount++;
-			SpinLockRelease(&poscan->downlinksCalc);
-
 			LWLockAcquire(&poscan->downlinksPublish, LW_EXCLUSIVE);
-			poscan->workersPublishedDownlinks++;
 			if(scan->downlinksCount > 0)
 			{
 				scan->dsmSeg = dsm_attach(poscan->dsmHandle);
@@ -445,7 +437,7 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 				scan->diskDownlinks, scan->downlinksCount * sizeof(BTreeSeqScanDiskDownlink));
 				poscan->downlinksIndex += scan->downlinksCount;
 			}
-		LWLockRelease(&poscan->downlinksPublish);
+			LWLockRelease(&poscan->downlinksPublish);
 		}
 	}
 }
@@ -883,7 +875,7 @@ load_next_disk_leaf_page(BTreeSeqScan *scan)
 			LWLockRelease(&poscan->downlinksSubscribe);
 			return false;
 		}
-		downlink = *(BTreeSeqScanDiskDownlink *)((char *)dsm_segment_address(scan->dsmSeg) + poscan->downlinksIndex * sizeof(BTreeSeqScanDiskDownlink));
+		downlink = *((BTreeSeqScanDiskDownlink *)((char *)dsm_segment_address(scan->dsmSeg) + poscan->downlinksIndex * sizeof(BTreeSeqScanDiskDownlink)));
 		poscan->downlinksIndex++;
 		LWLockRelease(&poscan->downlinksSubscribe);
 	}
