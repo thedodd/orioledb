@@ -438,9 +438,10 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 		{
 			LWLockAcquire(&poscan->downlinksPublish, LW_EXCLUSIVE);
 			Assert(scan->downlinksCount == downlinksCount);
-			if(scan->downlinksCount > 0)
-			{
+			if (poscan->downlinksCount > 0)
 				scan->dsmSeg = dsm_attach(poscan->dsmHandle);
+			if (scan->downlinksCount > 0)
+			{
 				memcpy((char *)dsm_segment_address(scan->dsmSeg) + poscan->downlinkIndex * sizeof(scan->diskDownlinks[0]),
 				scan->diskDownlinks, scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
 				poscan->downlinkIndex += scan->downlinksCount;
