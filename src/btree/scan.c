@@ -401,6 +401,7 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 			if (poscan->downlinksCount > 0)
 			{
 				/* Create DSM segment and publish downlinks list first*/
+				Assert(!poscan->dsmHandle);
 				scan->dsmSeg = dsm_create(MAXALIGN(poscan->downlinksCount * sizeof(scan->diskDownlinks[0])), 0);
 				poscan->dsmHandle = dsm_segment_handle(scan->dsmSeg);
 				memcpy((char *)dsm_segment_address(scan->dsmSeg), scan->diskDownlinks,
@@ -432,6 +433,7 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 			LWLockAcquire(&poscan->downlinksPublish, LW_EXCLUSIVE);
 			if (poscan->downlinksCount > 0)
 			{
+				Assert(poscan->dsmHandle && !scan->dsmSeg);
 				scan->dsmSeg = dsm_attach(poscan->dsmHandle);
 				memcpy((char *)dsm_segment_address(scan->dsmSeg) + poscan->downlinkIndex * sizeof(scan->diskDownlinks[0]),
 					   scan->diskDownlinks, scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
@@ -966,6 +968,7 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 	scan->intStartOffset = 0;
 	scan->samplingNumber = 0;
 	scan->sampler = sampler;
+	scan->dsmSeg = NULL;
 	if (sampler)
 	{
 		scan->needSampling = true;
@@ -1510,6 +1513,8 @@ free_btree_seq_scan(BTreeSeqScan *scan)
 	(void) pg_atomic_fetch_sub_u32(&metaPageBlkno->numSeqScans[scan->checkpointNumber % NUM_SEQ_SCANS_ARRAY_SIZE], 1);
 	END_CRIT_SECTION();
 
+	if (scan->dsmSeg)
+		dsm_detach(scan->dsmSeg);
 	pfree(scan->diskDownlinks);
 	pfree(scan);
 }
@@ -1528,7 +1533,6 @@ seq_scans_cleanup(void)
 		BTreeSeqScan *scan = dlist_head_element(BTreeSeqScan, listNode, &listOfScans);
 		BTreeMetaPage *metaPageBlkno;
 
-		/* TODO cleanup after parallel scan */
 		if (!scan->poscan)
 		{
 			metaPageBlkno = BTREE_GET_META(scan->desc);
@@ -1536,6 +1540,8 @@ seq_scans_cleanup(void)
 			(void) pg_atomic_fetch_sub_u32(&metaPageBlkno->numSeqScans[scan->checkpointNumber % NUM_SEQ_SCANS_ARRAY_SIZE], 1);
 		}
 		dlist_delete(&scan->listNode);
+		if (scan->dsmSeg)
+			dsm_detach(scan->dsmSeg);
 		pfree(scan);
 	}
 	dlist_init(&listOfScans);

@@ -1116,6 +1116,7 @@ orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
 	poscan->workersReportedCount = 0;
 	poscan->flags = 0;
 	poscan->cur_int_pageno = 0;
+	poscan->dsmHandle = 0;
 	memset(poscan->worker_active, 0, sizeof(poscan->worker_active));
 
 	return sizeof(ParallelOScanDescData);
