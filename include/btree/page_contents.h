@@ -311,8 +311,8 @@ typedef struct
 	union
 	{
 		char		fixedData[O_BTREE_MAX_KEY_SIZE];
-		void	   *p; /* for alignment purposes */
-	}	data;
+		void	   *p;			/* for alignment purposes */
+	}			data;
 	uint8		formatFlags;
 	bool		notNull;
 	int			len;

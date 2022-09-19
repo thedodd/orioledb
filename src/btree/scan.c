@@ -118,10 +118,10 @@ struct BTreeSeqScan
 	bool		firstPageIsLoaded;
 
 	/* Private parallel worker info in a backend */
-	ParallelOScanDesc 	poscan;
-	bool 				isLeader;
-	int 				workerNumber;
-	dsm_segment    	   *dsmSeg;
+	ParallelOScanDesc poscan;
+	bool		isLeader;
+	int			workerNumber;
+	dsm_segment *dsmSeg;
 };
 
 static dlist_head listOfScans = DLIST_STATIC_INIT(listOfScans);
@@ -258,7 +258,7 @@ load_next_historical_page(BTreeSeqScan *scan)
  * a page in a shared state and updating prevHikey.
  */
 static bool
-load_next_internal_page(BTreeSeqScan *scan,	OTuple prevHikey,
+load_next_internal_page(BTreeSeqScan *scan, OTuple prevHikey,
 						Page page,
 						BTreePageItemLocator *intLoc,
 						OffsetNumber *startOffset)
@@ -362,7 +362,7 @@ static void
 switch_to_disk_scan(BTreeSeqScan *scan)
 {
 	ParallelOScanDesc poscan = scan->poscan;
-	bool 			  diskLeader = false;
+	bool		diskLeader = false;
 
 	scan->status = BTreeSeqScanDisk;
 	BTREE_PAGE_LOCATOR_SET_INVALID(&scan->leafLoc);
@@ -394,7 +394,7 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 
 		if (diskLeader)
 		{
-			/* Wait until all workers publish their number of downlinks.*/
+			/* Wait until all workers publish their number of downlinks. */
 			while (true)
 			{
 				SpinLockAcquire(&poscan->workerBeginDisk);
@@ -415,16 +415,19 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 
 			if (poscan->downlinksCount > 0)
 			{
-				/* Create DSM segment and publish downlinks list first*/
+				/* Create DSM segment and publish downlinks list first */
 				Assert(!poscan->dsmHandle);
 				scan->dsmSeg = dsm_create(MAXALIGN(poscan->downlinksCount * sizeof(scan->diskDownlinks[0])), 0);
 				poscan->dsmHandle = dsm_segment_handle(scan->dsmSeg);
 				memcpy((Pointer) dsm_segment_address(scan->dsmSeg), scan->diskDownlinks,
-						scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
+					   scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
 				pg_atomic_fetch_add_u64(&poscan->downlinkIndex, scan->downlinksCount);
 				LWLockRelease(&poscan->downlinksPublish);
 
-				/* Wait until the other workers have published their downlinks lists */
+				/*
+				 * Wait until the other workers have published their downlinks
+				 * lists
+				 */
 				while (true)
 				{
 					if (pg_atomic_read_u64(&poscan->downlinkIndex) >= poscan->downlinksCount)
@@ -452,7 +455,7 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 		}
 		else
 		{
-			uint64	index;
+			uint64		index;
 
 			LWLockAcquire(&poscan->downlinksPublish, LW_EXCLUSIVE);
 			index = pg_atomic_read_u64(&poscan->downlinkIndex);
@@ -508,11 +511,11 @@ get_current_downlink_key(BTreeSeqScan *scan,
 						 uint64 *downlink,
 						 Page page)
 {
-	BTreeNonLeafTuphdr  *tuphdr;
-	OTuple 				 tuple;
+	BTreeNonLeafTuphdr *tuphdr;
+	OTuple		tuple;
 
 	STOPEVENT(STOPEVENT_STEP_DOWN, btree_downlink_stopevent_params(scan->desc,
-			  page, loc));
+																   page, loc));
 
 	BTREE_PAGE_READ_INTERNAL_ITEM(tuphdr, tuple, page, loc);
 	*downlink = tuphdr->downlink;
@@ -601,9 +604,10 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 				get_current_downlink_key(scan, &scan->intLoc, scan->intStartOffset,
 										 scan->prevHikey.tuple, keyRangeLow,
 										 downlink, scan->context.img);
+
 				/*
-				 * construct fixed hikey of internal item and get next internal
-				 * locator
+				 * construct fixed hikey of internal item and get next
+				 * internal locator
 				 */
 				get_next_key(scan, &scan->intLoc, keyRangeHigh, scan->context.img);
 				return true;
@@ -622,7 +626,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 		{
 			BTreeIntPageParallelData *curPage;
 			BTreeIntPageParallelData *nextPage;
-			BTreePageItemLocator	loc;
+			BTreePageItemLocator loc;
 
 			SpinLockAcquire(&poscan->intpageAccess);
 			curPage = CUR_PAGE(poscan);
@@ -636,7 +640,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 
 			if (curPage->status == OParallelScanPageInvalid)
 			{
-				bool					loaded;
+				bool		loaded;
 
 				if (!(poscan->flags & O_PARALLEL_FIRST_PAGE_LOADED))
 				{
@@ -691,7 +695,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 			if (nextPage->status == OParallelScanPageInvalid &&
 				!O_PAGE_IS(curPage->img, RIGHTMOST))
 			{
-				bool					loaded PG_USED_FOR_ASSERTS_ONLY;
+				bool		loaded PG_USED_FOR_ASSERTS_ONLY;
 
 				copy_fixed_shmem_hikey(scan->desc, &nextPage->prevHikey, curPage->img);
 				nextPage->status = OParallelScanPageInProgress;
@@ -717,7 +721,7 @@ get_next_downlink(BTreeSeqScan *scan, uint64 *downlink,
 
 			BTREE_PAGE_OFFSET_GET_LOCATOR(curPage->img, curPage->offset, &loc);
 
-			if (BTREE_PAGE_LOCATOR_IS_VALID(curPage->img, &loc)) /* inside int page */
+			if (BTREE_PAGE_LOCATOR_IS_VALID(curPage->img, &loc))	/* inside int page */
 			{
 				get_current_downlink_key(scan, &loc, curPage->startOffset,
 										 fixed_shmem_key_get_tuple(&curPage->prevHikey),
@@ -899,14 +903,14 @@ load_next_disk_leaf_page(BTreeSeqScan *scan)
 	}
 	else
 	{
-		uint64	index = pg_atomic_fetch_add_u64(&poscan->downlinkIndex, 1);
+		uint64		index = pg_atomic_fetch_add_u64(&poscan->downlinkIndex, 1);
 
 		if (index >= poscan->downlinksCount)
 		{
 			LWLockRelease(&poscan->downlinksSubscribe);
 			return false;
 		}
-		downlink = ((BTreeSeqScanDiskDownlink *)dsm_segment_address(scan->dsmSeg))[index];
+		downlink = ((BTreeSeqScanDiskDownlink *) dsm_segment_address(scan->dsmSeg))[index];
 	}
 
 	success = read_page_from_disk(scan->desc,
@@ -935,9 +939,10 @@ load_next_disk_leaf_page(BTreeSeqScan *scan)
 }
 
 static inline
-bool single_leaf_page_rel(BTreeSeqScan *scan)
+bool
+single_leaf_page_rel(BTreeSeqScan *scan)
 {
-	if(scan->poscan)
+	if (scan->poscan)
 		return (scan->poscan->flags & O_PARALLEL_IS_SINGLE_LEAF_PAGE) != 0;
 	else
 		return scan->isSingleLeafPage;
@@ -958,7 +963,9 @@ make_btree_seq_scan_internal(BTreeDescr *desc, CommitSeqNo csn,
 	if (poscan)
 	{
 		SpinLockAcquire(&poscan->workerStart);
-		for (scan->workerNumber = 0; poscan->worker_active[scan->workerNumber] == true; scan->workerNumber++) {}
+		for (scan->workerNumber = 0; poscan->worker_active[scan->workerNumber] == true; scan->workerNumber++)
+		{
+		}
 
 		poscan->worker_active[scan->workerNumber] = true;
 		poscan->nworkers = scan->workerNumber + 1;
