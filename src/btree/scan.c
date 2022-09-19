@@ -419,21 +419,16 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 				Assert(!poscan->dsmHandle);
 				scan->dsmSeg = dsm_create(MAXALIGN(poscan->downlinksCount * sizeof(scan->diskDownlinks[0])), 0);
 				poscan->dsmHandle = dsm_segment_handle(scan->dsmSeg);
-				memcpy((char *)dsm_segment_address(scan->dsmSeg), scan->diskDownlinks,
+				memcpy((Pointer) dsm_segment_address(scan->dsmSeg), scan->diskDownlinks,
 						scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
-				poscan->downlinkIndex += scan->downlinksCount;
+				pg_atomic_fetch_add_u64(&poscan->downlinkIndex, scan->downlinksCount);
 				LWLockRelease(&poscan->downlinksPublish);
 
 				/* Wait until the other workers have published their downlinks lists */
 				while (true)
 				{
-					SpinLockAcquire(&poscan->workerBeginDisk);
-					if (poscan->downlinkIndex >= poscan->downlinksCount)
-					{
-						SpinLockRelease(&poscan->workerBeginDisk);
+					if (pg_atomic_read_u64(&poscan->downlinkIndex) >= poscan->downlinksCount)
 						break;
-					}
-					SpinLockRelease(&poscan->workerBeginDisk);
 
 					ConditionVariableSleep(&poscan->downlinksCv, WAIT_EVENT_PARALLEL_FINISH);
 				}
@@ -451,25 +446,29 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 				LWLockRelease(&poscan->downlinksPublish);
 			}
 
-			poscan->downlinkIndex = 0;
+			pg_atomic_write_u64(&poscan->downlinkIndex, 0);
 			LWLockRelease(&poscan->downlinksSubscribe);
 			/* Now workers can get downlinks from shared sorted list */
 		}
 		else
 		{
+			uint64	index;
+
 			LWLockAcquire(&poscan->downlinksPublish, LW_EXCLUSIVE);
+			index = pg_atomic_read_u64(&poscan->downlinkIndex);
 			if (poscan->downlinksCount > 0)
 			{
 				Assert(poscan->dsmHandle && !scan->dsmSeg);
 				scan->dsmSeg = dsm_attach(poscan->dsmHandle);
-				memcpy((char *)dsm_segment_address(scan->dsmSeg) + poscan->downlinkIndex * sizeof(scan->diskDownlinks[0]),
+				memcpy((Pointer) dsm_segment_address(scan->dsmSeg) + index * sizeof(scan->diskDownlinks[0]),
 					   scan->diskDownlinks, scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
-				poscan->downlinkIndex += scan->downlinksCount;
+				index = pg_atomic_add_fetch_u64(&poscan->downlinkIndex, scan->downlinksCount);
 			}
-			if (poscan->downlinkIndex == poscan->downlinksCount)
+			if (index == poscan->downlinksCount)
 				ConditionVariableBroadcast(&poscan->downlinksCv);
 			LWLockRelease(&poscan->downlinksPublish);
 		}
+		LWLockAcquire(&poscan->downlinksSubscribe, LW_SHARED);
 	}
 }
 
@@ -900,15 +899,14 @@ load_next_disk_leaf_page(BTreeSeqScan *scan)
 	}
 	else
 	{
-		LWLockAcquire(&poscan->downlinksSubscribe, LW_EXCLUSIVE);
-		if (poscan->downlinkIndex >= poscan->downlinksCount)
+		uint64	index = pg_atomic_fetch_add_u64(&poscan->downlinkIndex, 1);
+
+		if (index >= poscan->downlinksCount)
 		{
 			LWLockRelease(&poscan->downlinksSubscribe);
 			return false;
 		}
-		downlink = *((BTreeSeqScanDiskDownlink *)((char *)dsm_segment_address(scan->dsmSeg) + poscan->downlinkIndex * sizeof(scan->diskDownlinks[0])));
-		poscan->downlinkIndex++;
-		LWLockRelease(&poscan->downlinksSubscribe);
+		downlink = ((BTreeSeqScanDiskDownlink *)dsm_segment_address(scan->dsmSeg))[index];
 	}
 
 	success = read_page_from_disk(scan->desc,

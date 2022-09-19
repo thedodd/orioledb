@@ -190,8 +190,8 @@ typedef struct ParallelOScanDescData
 	LWLock						intpageLoad,		/* for sequential internal page loading */
 								downlinksSubscribe, /* workers can get disk downlinks from shared state */
 								downlinksPublish;	/* workers can put disk downlinks to shared state */
-	int64						downlinksCount,		/* cumulative number of disk downlinks in all workers */
-								downlinkIndex;
+	uint64						downlinksCount;		/* cumulative number of disk downlinks in all workers */
+	pg_atomic_uint64			downlinkIndex;
 	ConditionVariable			downlinksCv;
 	int 						workersReportedCount;	/* number of workers that reported disk downlinks number */
 	bits8						flags;
