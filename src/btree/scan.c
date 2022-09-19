@@ -42,7 +42,11 @@
 #include "tableam/handler.h"
 
 #include "miscadmin.h"
+#if PG_VERSION_NUM >= 140000
 #include "utils/wait_event.h"
+#else
+#include "pgstat.h"
+#endif
 
 typedef enum
 {
