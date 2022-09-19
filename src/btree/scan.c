@@ -42,6 +42,7 @@
 #include "tableam/handler.h"
 
 #include "miscadmin.h"
+#include "utils/wait_event.h"
 
 typedef enum
 {
@@ -366,10 +367,12 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 	scan->status = BTreeSeqScanDisk;
 	BTREE_PAGE_LOCATOR_SET_INVALID(&scan->leafLoc);
 	if (!poscan)
+	{
 		qsort(scan->diskDownlinks,
 			  scan->downlinksCount,
 			  sizeof(scan->diskDownlinks[0]),
 			  cmp_downlinks);
+	}
 	else
 	{
 		SpinLockAcquire(&poscan->workerBeginDisk);
@@ -383,17 +386,29 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 		/* Publish the number of downlinks */
 		poscan->downlinksCount += scan->downlinksCount;
 		poscan->workersReportedCount++;
+
+		if (poscan->workersReportedCount == poscan->nworkers)
+			ConditionVariableBroadcast(&poscan->downlinksCv);
+
 		SpinLockRelease(&poscan->workerBeginDisk);
 
 		if (diskLeader)
 		{
-			SpinDelayStatus status;
-
 			/* Wait until all workers publish their number of downlinks.*/
-			init_local_spin_delay(&status);
-			while (poscan->workersReportedCount < poscan->nworkers)
-				perform_spin_delay(&status);
-			finish_spin_delay(&status);
+			while (true)
+			{
+				SpinLockAcquire(&poscan->workerBeginDisk);
+				if (poscan->workersReportedCount >= poscan->nworkers)
+				{
+					SpinLockRelease(&poscan->workerBeginDisk);
+					break;
+				}
+				SpinLockRelease(&poscan->workerBeginDisk);
+
+				ConditionVariableSleep(&poscan->downlinksCv, WAIT_EVENT_PARALLEL_FINISH);
+			}
+			ConditionVariableCancelSleep();
+
 			/* Make sure all workers released this lock */
 			SpinLockAcquire(&poscan->workerBeginDisk);
 			SpinLockRelease(&poscan->workerBeginDisk);
@@ -410,10 +425,20 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 				LWLockRelease(&poscan->downlinksPublish);
 
 				/* Wait until the other workers have published their downlinks lists */
-				init_local_spin_delay(&status);
-				while (poscan->downlinkIndex < poscan->downlinksCount)
-					perform_spin_delay(&status);
-				finish_spin_delay(&status);
+				while (true)
+				{
+					SpinLockAcquire(&poscan->workerBeginDisk);
+					if (poscan->downlinkIndex >= poscan->downlinksCount)
+					{
+						SpinLockRelease(&poscan->workerBeginDisk);
+						break;
+					}
+					SpinLockRelease(&poscan->workerBeginDisk);
+
+					ConditionVariableSleep(&poscan->downlinksCv, WAIT_EVENT_PARALLEL_FINISH);
+				}
+				ConditionVariableCancelSleep();
+
 				/* Make sure all workers released this lock */
 				LWLockAcquire(&poscan->downlinksPublish, LW_EXCLUSIVE);
 				LWLockRelease(&poscan->downlinksPublish);
@@ -422,7 +447,9 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 					  sizeof(scan->diskDownlinks[0]), cmp_downlinks);
 			}
 			else
+			{
 				LWLockRelease(&poscan->downlinksPublish);
+			}
 
 			poscan->downlinkIndex = 0;
 			LWLockRelease(&poscan->downlinksSubscribe);
@@ -439,6 +466,8 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 					   scan->diskDownlinks, scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
 				poscan->downlinkIndex += scan->downlinksCount;
 			}
+			if (poscan->downlinkIndex == poscan->downlinksCount)
+				ConditionVariableBroadcast(&poscan->downlinksCv);
 			LWLockRelease(&poscan->downlinksPublish);
 		}
 	}

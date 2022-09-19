@@ -192,6 +192,7 @@ typedef struct ParallelOScanDescData
 								downlinksPublish;	/* workers can put disk downlinks to shared state */
 	int64						downlinksCount,		/* cumulative number of disk downlinks in all workers */
 								downlinkIndex;
+	ConditionVariable			downlinksCv;
 	int 						workersReportedCount;	/* number of workers that reported disk downlinks number */
 	bits8						flags;
 	int 						nworkers;
