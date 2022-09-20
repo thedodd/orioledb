@@ -1,0 +1,1362 @@
+Parsed test spec with 2 sessions
+
+starting permutation: begin_1 begin_2 select_1 delete_1 select_1 select_2 delete_2 select_1 commit_1 select_1 select_2 commit_2 select_1 select_2
+step begin_1: BEGIN;
+step begin_2: BEGIN;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  101
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                        
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step delete_1: DELETE FROM o_test_1 WHERE val_1 = 1;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = update, deleted, undoLocation = 0, offset = 264, tuple = ('1', '101')
+      Undo item: 
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  101
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = update, deleted, undoLocation = 0, offset = 264, tuple = ('1', '101')
+      Undo item: 
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step delete_2: DELETE FROM o_test_1 WHERE val_1 = 1; <waiting ...>
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = update, deleted, undoLocation = 0, offset = 264, tuple = ('1', '101')
+      Undo item: 
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step commit_1: COMMIT;
+step delete_2: <... completed>
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step commit_2: COMMIT;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+
+starting permutation: begin_1 begin_2 select_1 update_1_2 select_1 select_2 update_2_2 commit_1 select_1 select_2 commit_2 select_1 select_2
+step begin_1: BEGIN;
+step begin_2: BEGIN;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  101
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                        
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step update_1_2: UPDATE o_test_1 SET val_2 = val_2 + 10 WHERE val_1 = 1;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  111
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = noKeyUpdate, undoLocation = 0, offset = 264, tuple = ('1', '111')
+      Undo item: tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  101
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = noKeyUpdate, undoLocation = 0, offset = 264, tuple = ('1', '111')
+      Undo item: tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step update_2_2: UPDATE o_test_1 SET val_2 = val_2 + 20 WHERE val_1 = 1; <waiting ...>
+step commit_1: COMMIT;
+step update_2_2: <... completed>
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  111
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = noKeyUpdate, undoLocation = 0, offset = 264, tuple = ('1', '131')
+      Undo item: tuple = ('1', '111')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  131
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = noKeyUpdate, undoLocation = 0, offset = 264, tuple = ('1', '131')
+      Undo item: tuple = ('1', '111')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step commit_2: COMMIT;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  131
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                        
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: offset = 264, tuple = ('1', '131')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  131
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                        
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: offset = 264, tuple = ('1', '131')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+
+starting permutation: begin_1 begin_2 select_1 savepoint_2 update_1_2 select_1 select_2 update_2_2 commit_1 select_1 select_2 rollback_to_savepoint_2 select_1 select_2 commit_2 select_1 select_2
+step begin_1: BEGIN;
+step begin_2: BEGIN;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  101
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                        
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step savepoint_2: SAVEPOINT s1;
+step update_1_2: UPDATE o_test_1 SET val_2 = val_2 + 10 WHERE val_1 = 1;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  111
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = noKeyUpdate, undoLocation = 0, offset = 264, tuple = ('1', '111')
+      Undo item: tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  101
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = noKeyUpdate, undoLocation = 0, offset = 264, tuple = ('1', '111')
+      Undo item: tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step update_2_2: UPDATE o_test_1 SET val_2 = val_2 + 20 WHERE val_1 = 1; <waiting ...>
+step commit_1: COMMIT;
+step update_2_2: <... completed>
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  111
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = noKeyUpdate, undoLocation = 1, offset = 264, tuple = ('1', '131')
+      Undo item: undoLocation = 0, tuple = ('1', '111')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  131
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = noKeyUpdate, undoLocation = 1, offset = 264, tuple = ('1', '131')
+      Undo item: undoLocation = 0, tuple = ('1', '111')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step rollback_to_savepoint_2: ROLLBACK TO s1;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  111
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                          
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: undoLocation = 0, offset = 264, tuple = ('1', '111')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  111
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                          
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: undoLocation = 0, offset = 264, tuple = ('1', '111')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step commit_2: COMMIT;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  111
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                        
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: offset = 264, tuple = ('1', '111')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  111
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                        
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: offset = 264, tuple = ('1', '111')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+
+starting permutation: begin_1 begin_2 select_1 delete_1 select_1 select_2 update_2 select_1 commit_1 select_1 select_2 commit_2 select_1 select_2
+step begin_1: BEGIN;
+step begin_2: BEGIN;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  101
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                        
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step delete_1: DELETE FROM o_test_1 WHERE val_1 = 1;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = update, deleted, undoLocation = 0, offset = 264, tuple = ('1', '101')
+      Undo item: 
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  101
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = update, deleted, undoLocation = 0, offset = 264, tuple = ('1', '101')
+      Undo item: 
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step update_2: UPDATE o_test_1 SET val_1 = val_1 + 20 WHERE val_1 = 1; <waiting ...>
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = update, deleted, undoLocation = 0, offset = 264, tuple = ('1', '101')
+      Undo item: 
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step commit_1: COMMIT;
+step update_2: <... completed>
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step commit_2: COMMIT;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+
+starting permutation: begin_1 begin_2 select_1 update_1 select_1 select_2 update_2 select_1 commit_1 select_1 select_2 commit_2 select_1 select_2
+step begin_1: BEGIN;
+step begin_2: BEGIN;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  101
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                        
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step update_1: UPDATE o_test_1 SET val_1 = val_1 + 10 WHERE val_1 = 1;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+   11|  101
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = update, deleted, undoLocation = 0, offset = 264, tuple = ('1', '101')
+      Undo item: 
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+    Item 3: mode = update, offset = 336, tuple = ('11', '101')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  101
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = update, deleted, undoLocation = 0, offset = 264, tuple = ('1', '101')
+      Undo item: 
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+    Item 3: mode = update, offset = 336, tuple = ('11', '101')
+
+Index toast: not loaded
+
+(1 row)
+
+step update_2: UPDATE o_test_1 SET val_1 = val_1 + 20 WHERE val_1 = 1; <waiting ...>
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+   11|  101
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = update, deleted, undoLocation = 0, offset = 264, tuple = ('1', '101')
+      Undo item: 
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+    Item 3: mode = update, offset = 336, tuple = ('11', '101')
+
+Index toast: not loaded
+
+(1 row)
+
+step commit_1: COMMIT;
+step update_2: <... completed>
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+   11|  101
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+    Item 3: offset = 336, tuple = ('11', '101')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+   11|  101
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+    Item 3: offset = 336, tuple = ('11', '101')
+
+Index toast: not loaded
+
+(1 row)
+
+step commit_2: COMMIT;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+   11|  101
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+    Item 3: offset = 336, tuple = ('11', '101')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+   11|  101
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+    Item 3: offset = 336, tuple = ('11', '101')
+
+Index toast: not loaded
+
+(1 row)
+
+
+starting permutation: begin_1 begin_2 select_1 delete_1 select_1 select_2 update_2_2 select_1 commit_1 select_1 select_2 commit_2 select_1 select_2
+step begin_1: BEGIN;
+step begin_2: BEGIN;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  101
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                        
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 0
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step delete_1: DELETE FROM o_test_1 WHERE val_1 = 1;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = update, deleted, undoLocation = 0, offset = 264, tuple = ('1', '101')
+      Undo item: 
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    1|  101
+    2|  102
+    3|  103
+(3 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = update, deleted, undoLocation = 0, offset = 264, tuple = ('1', '101')
+      Undo item: 
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step update_2_2: UPDATE o_test_1 SET val_2 = val_2 + 20 WHERE val_1 = 1; <waiting ...>
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: mode = update, deleted, undoLocation = 0, offset = 264, tuple = ('1', '101')
+      Undo item: 
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step commit_1: COMMIT;
+step update_2_2: <... completed>
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step commit_2: COMMIT;
+step select_1: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+
+step select_2: 
+					SELECT * FROM o_test_1 ORDER BY val_1;
+					SELECT orioledb_tbl_structure('o_test_1'::regclass,
+												  'nue');
+
+val_1|val_2
+-----+-----
+    2|  102
+    3|  103
+(2 rows)
+
+orioledb_tbl_structure                                                                                                                                                                                                                                                                                                                                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Index o_test_1_pkey contents
+Page 0: level = 0, maxKeyLen = 8, nVacatedBytes = 24
+state = free, datoid equal, relnode equal, ix_type = primary, dirty
+    Leftmost, Rightmost
+  Chunk 0: offset = 0, location = 256, hikey location = 64
+    Item 0: deleted, offset = 264, tuple = ('1', '101')
+    Item 1: offset = 288, tuple = ('2', '102')
+    Item 2: offset = 312, tuple = ('3', '103')
+
+Index toast: not loaded
+
+(1 row)
+

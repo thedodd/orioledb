@@ -37,6 +37,7 @@ typedef struct OTableModifyResult
 	/* the modified tuple */
 	TupleTableSlot *oldTuple;
 	bool		self_modified;
+	bool		concurrent_delete;
 } OTableModifyResult;
 
 typedef struct

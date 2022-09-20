@@ -401,9 +401,9 @@ print_page_contents_recursive(BTreeDescr *desc, OInMemoryBlkno blkno,
 					appendStringInfo(outbuf, "\n");
 
 					if ((!XACT_INFO_IS_FINISHED(tuphdr.xactInfo) || tuphdr.chainHasLocks) &&
-						UndoLocationIsValid(tuphdr.undoLocation))
+						UndoLocationIsValid(tuphdr.undoLocation) &&
+						UNDO_REC_EXISTS(tuphdr.undoLocation))
 					{
-						Assert(UNDO_REC_EXISTS(tuphdr.undoLocation));
 						if (inUndo && !O_TUPLE_IS_NULL(tuple))
 							pfree(tuple.data);
 						if (!tuphdr.deleted && !XACT_INFO_IS_LOCK_ONLY(tuphdr.xactInfo))
@@ -548,7 +548,8 @@ btree_calculate_min_values(OInMemoryBlkno blkno, BTreePrintData *printData)
 					}
 				}
 				if ((!XACT_INFO_IS_FINISHED(tuphdr.xactInfo) || tuphdr.chainHasLocks) &&
-					UndoLocationIsValid(tuphdr.undoLocation))
+					UndoLocationIsValid(tuphdr.undoLocation) &&
+					UNDO_REC_EXISTS(tuphdr.undoLocation))
 					get_prev_leaf_header_from_undo(&tuphdr, false);
 				else
 					break;

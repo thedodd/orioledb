@@ -425,6 +425,9 @@ orioledb_tuple_delete(ModifyTableState *mstate,
 	marg.epqstate = &mstate->mt_epqstate;
 	marg.scanSlot = returningSlot ? returningSlot : descr->oldTuple;
 	marg.rowLockMode = RowLockUpdate;
+	marg.deleted = false;
+	marg.modified = false;
+	marg.tup_undo_location = InvalidUndoLocation;
 
 	get_keys_from_rowid(GET_PRIMARY(descr), tupleid, &pkey, &hint, NULL, NULL);
 
@@ -524,6 +527,9 @@ orioledb_tuple_update(ModifyTableState *mstate, ResultRelInfo *rinfo,
 	marg.epqstate = &mstate->mt_epqstate;
 	marg.scanSlot = descr->oldTuple;
 	marg.newSlot = (OTableSlot *) slot;
+	marg.deleted = false;
+	marg.modified = false;
+	marg.tup_undo_location = InvalidUndoLocation;
 
 	/*
 	 * Get appropriate row lock mode.
@@ -607,9 +613,9 @@ orioledb_tuple_update(ModifyTableState *mstate, ResultRelInfo *rinfo,
 
 	o_check_tbl_update_mres(mres, descr, rel, slot);
 
-	Assert(mres.success);
+	Assert(mres.success || mres.concurrent_delete);
 
-	return mres.oldTuple ? TM_Ok : TM_Deleted;
+	return mres.oldTuple && !mres.concurrent_delete ? TM_Ok : TM_Deleted;
 }
 
 static TM_Result
