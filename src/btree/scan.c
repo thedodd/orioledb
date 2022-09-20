@@ -390,32 +390,18 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 		/* Publish the number of downlinks */
 		poscan->downlinksCount += scan->downlinksCount;
 		poscan->workersReportedCount++;
+		SpinLockRelease(&poscan->workerBeginDisk);
 
 		if (poscan->workersReportedCount == poscan->nworkers)
 			ConditionVariableBroadcast(&poscan->downlinksCv);
 
-		SpinLockRelease(&poscan->workerBeginDisk);
-
 		if (diskLeader)
 		{
 			/* Wait until all workers publish their number of downlinks. */
-			while (true)
-			{
-				SpinLockAcquire(&poscan->workerBeginDisk);
-				if (poscan->workersReportedCount >= poscan->nworkers)
-				{
-					SpinLockRelease(&poscan->workerBeginDisk);
-					break;
-				}
-				SpinLockRelease(&poscan->workerBeginDisk);
-
+			while (poscan->workersReportedCount < poscan->nworkers)
 				ConditionVariableSleep(&poscan->downlinksCv, WAIT_EVENT_PARALLEL_FINISH);
-			}
-			ConditionVariableCancelSleep();
 
-			/* Make sure all workers released this lock */
-			SpinLockAcquire(&poscan->workerBeginDisk);
-			SpinLockRelease(&poscan->workerBeginDisk);
+			ConditionVariableCancelSleep();
 
 			if (poscan->downlinksCount > 0)
 			{
@@ -432,13 +418,9 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 				 * Wait until the other workers have published their downlinks
 				 * lists
 				 */
-				while (true)
-				{
-					if (pg_atomic_read_u64(&poscan->downlinkIndex) >= poscan->downlinksCount)
-						break;
-
+				while (pg_atomic_read_u64(&poscan->downlinkIndex) < poscan->downlinksCount)
 					ConditionVariableSleep(&poscan->downlinksCv, WAIT_EVENT_PARALLEL_FINISH);
-				}
+
 				ConditionVariableCancelSleep();
 
 				/* Make sure all workers released this lock */
