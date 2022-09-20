@@ -1098,7 +1098,8 @@ orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
 	SpinLockInit(&poscan->intpageAccess);
 	SpinLockInit(&poscan->workerStart);
 	SpinLockInit(&poscan->workerBeginDisk);
-	ConditionVariableInit(&poscan->downlinksCv);
+	ConditionVariableInit(&poscan->downlinksCv_step1);
+	ConditionVariableInit(&poscan->downlinksCv_step2);
 	LWLockInitialize(&poscan->intpageLoad, btreeScanShmem->pageLoadTrancheId);
 	LWLockInitialize(&poscan->downlinksSubscribe, btreeScanShmem->downlinksSubscribeTrancheId);
 	LWLockInitialize(&poscan->downlinksPublish, btreeScanShmem->downlinksPublishTrancheId);

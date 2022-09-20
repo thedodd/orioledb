@@ -393,13 +393,13 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 		SpinLockRelease(&poscan->workerBeginDisk);
 
 		if (poscan->workersReportedCount == poscan->nworkers)
-			ConditionVariableBroadcast(&poscan->downlinksCv);
+			ConditionVariableBroadcast(&poscan->downlinksCv_step1);
 
 		if (diskLeader)
 		{
 			/* Wait until all workers publish their number of downlinks. */
 			while (poscan->workersReportedCount < poscan->nworkers)
-				ConditionVariableSleep(&poscan->downlinksCv, WAIT_EVENT_PARALLEL_FINISH);
+				ConditionVariableSleep(&poscan->downlinksCv_step1, WAIT_EVENT_PARALLEL_FINISH);
 
 			ConditionVariableCancelSleep();
 
@@ -419,7 +419,7 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 				 * lists
 				 */
 				while (pg_atomic_read_u64(&poscan->downlinkIndex) < poscan->downlinksCount)
-					ConditionVariableSleep(&poscan->downlinksCv, WAIT_EVENT_PARALLEL_FINISH);
+					ConditionVariableSleep(&poscan->downlinksCv_step2, WAIT_EVENT_PARALLEL_FINISH);
 
 				ConditionVariableCancelSleep();
 
@@ -441,21 +441,21 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 		}
 		else
 		{
-			uint64		index;
+			uint64		index = 0;
 
-			LWLockAcquire(&poscan->downlinksPublish, LW_EXCLUSIVE);
-			index = pg_atomic_read_u64(&poscan->downlinkIndex);
+			LWLockAcquire(&poscan->downlinksPublish, LW_SHARED);
 			if (poscan->downlinksCount > 0)
 			{
 				Assert(poscan->dsmHandle && !scan->dsmSeg);
 				scan->dsmSeg = dsm_attach(poscan->dsmHandle);
+				index = pg_atomic_fetch_add_u64(&poscan->downlinkIndex, scan->downlinksCount);
 				memcpy((Pointer) dsm_segment_address(scan->dsmSeg) + index * sizeof(scan->diskDownlinks[0]),
 					   scan->diskDownlinks, scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
-				index = pg_atomic_add_fetch_u64(&poscan->downlinkIndex, scan->downlinksCount);
 			}
-			if (index == poscan->downlinksCount)
-				ConditionVariableBroadcast(&poscan->downlinksCv);
 			LWLockRelease(&poscan->downlinksPublish);
+
+			if (pg_atomic_read_u64(&poscan->downlinkIndex) == poscan->downlinksCount)
+				ConditionVariableBroadcast(&poscan->downlinksCv_step2);
 		}
 		LWLockAcquire(&poscan->downlinksSubscribe, LW_SHARED);
 	}

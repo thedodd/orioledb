@@ -200,7 +200,8 @@ typedef struct ParallelOScanDescData
 	uint64		downlinksCount; /* cumulative number of disk downlinks in all
 								 * workers */
 	pg_atomic_uint64 downlinkIndex;
-	ConditionVariable downlinksCv;
+	ConditionVariable downlinksCv_step1,
+					  downlinksCv_step2;
 	int			workersReportedCount;	/* number of workers that reported
 										 * disk downlinks number */
 	bits8		flags;
