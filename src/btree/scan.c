@@ -456,20 +456,23 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 			LWLockRelease(&poscan->downlinksSubscribe);
 			/* Now workers can get downlinks from shared sorted list */
 		}
-		else if (scan->downlinksCount > 0)
+		else
 		{
 			uint64		index;
 
 			LWLockAcquire(&poscan->downlinksPublish, LW_SHARED);
 			Assert(poscan->dsmHandle && !scan->dsmSeg);
 			scan->dsmSeg = dsm_attach(poscan->dsmHandle);
-			index = pg_atomic_fetch_add_u64(&poscan->downlinkIndex, scan->downlinksCount);
-			memcpy((Pointer) dsm_segment_address(scan->dsmSeg) + index * sizeof(scan->diskDownlinks[0]),
-					scan->diskDownlinks, scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
-			index += scan->downlinksCount;
+			if (scan->downlinksCount > 0)
+			{
+				index = pg_atomic_fetch_add_u64(&poscan->downlinkIndex, scan->downlinksCount);
+				memcpy((Pointer) dsm_segment_address(scan->dsmSeg) + index * sizeof(scan->diskDownlinks[0]),
+						scan->diskDownlinks, scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
+				index += scan->downlinksCount;
+			}
 			LWLockRelease(&poscan->downlinksPublish);
 
-			if (index == poscan->downlinksCount)
+			if (scan->downlinksCount > 0 && index == poscan->downlinksCount)
 				ConditionVariableBroadcast(&poscan->downlinksCv);
 		}
 		LWLockAcquire(&poscan->downlinksSubscribe, LW_SHARED);
