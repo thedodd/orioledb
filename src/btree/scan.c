@@ -379,6 +379,8 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 	}
 	else
 	{
+		int		workersReportedCount;
+
 		SpinLockAcquire(&poscan->workerBeginDisk);
 		if (!(poscan->flags & O_PARALLEL_DISK_SCAN_STARTED))
 		{
@@ -389,12 +391,11 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 		}
 		/* Publish the number of downlinks */
 		poscan->downlinksCount += scan->downlinksCount;
-		poscan->workersReportedCount++;
-
-		if (poscan->workersReportedCount == poscan->nworkers)
-			ConditionVariableBroadcast(&poscan->downlinksCv);
-
+		workersReportedCount = ++poscan->workersReportedCount;
 		SpinLockRelease(&poscan->workerBeginDisk);
+
+		if (workersReportedCount == poscan->nworkers)
+			ConditionVariableBroadcast(&poscan->downlinksCv);
 
 		if (diskLeader)
 		{
@@ -402,7 +403,8 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 			while (true)
 			{
 				SpinLockAcquire(&poscan->workerBeginDisk);
-				if (poscan->workersReportedCount >= poscan->nworkers)
+				Assert(poscan->workersReportedCount <= poscan->nworkers);
+				if (poscan->workersReportedCount == poscan->nworkers)
 				{
 					SpinLockRelease(&poscan->workerBeginDisk);
 					break;
@@ -412,10 +414,6 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 				ConditionVariableSleep(&poscan->downlinksCv, WAIT_EVENT_PARALLEL_FINISH);
 			}
 			ConditionVariableCancelSleep();
-
-			/* Make sure all workers released this lock */
-			SpinLockAcquire(&poscan->workerBeginDisk);
-			SpinLockRelease(&poscan->workerBeginDisk);
 
 			if (poscan->downlinksCount > 0)
 			{
@@ -434,7 +432,8 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 				 */
 				while (true)
 				{
-					if (pg_atomic_read_u64(&poscan->downlinkIndex) >= poscan->downlinksCount)
+					Assert(pg_atomic_read_u64(&poscan->downlinkIndex) <= poscan->downlinksCount);
+					if (pg_atomic_read_u64(&poscan->downlinkIndex) == poscan->downlinksCount)
 						break;
 
 					ConditionVariableSleep(&poscan->downlinksCv, WAIT_EVENT_PARALLEL_FINISH);
@@ -457,23 +456,21 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 			LWLockRelease(&poscan->downlinksSubscribe);
 			/* Now workers can get downlinks from shared sorted list */
 		}
-		else
+		else if (scan->downlinksCount > 0)
 		{
 			uint64		index;
 
-			LWLockAcquire(&poscan->downlinksPublish, LW_EXCLUSIVE);
-			index = pg_atomic_read_u64(&poscan->downlinkIndex);
-			if (poscan->downlinksCount > 0)
-			{
-				Assert(poscan->dsmHandle && !scan->dsmSeg);
-				scan->dsmSeg = dsm_attach(poscan->dsmHandle);
-				memcpy((Pointer) dsm_segment_address(scan->dsmSeg) + index * sizeof(scan->diskDownlinks[0]),
-					   scan->diskDownlinks, scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
-				index = pg_atomic_add_fetch_u64(&poscan->downlinkIndex, scan->downlinksCount);
-			}
+			LWLockAcquire(&poscan->downlinksPublish, LW_SHARED);
+			Assert(poscan->dsmHandle && !scan->dsmSeg);
+			scan->dsmSeg = dsm_attach(poscan->dsmHandle);
+			index = pg_atomic_fetch_add_u64(&poscan->downlinkIndex, scan->downlinksCount);
+			memcpy((Pointer) dsm_segment_address(scan->dsmSeg) + index * sizeof(scan->diskDownlinks[0]),
+					scan->diskDownlinks, scan->downlinksCount * sizeof(scan->diskDownlinks[0]));
+			index += scan->downlinksCount;
+			LWLockRelease(&poscan->downlinksPublish);
+
 			if (index == poscan->downlinksCount)
 				ConditionVariableBroadcast(&poscan->downlinksCv);
-			LWLockRelease(&poscan->downlinksPublish);
 		}
 		LWLockAcquire(&poscan->downlinksSubscribe, LW_SHARED);
 	}
