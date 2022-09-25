@@ -461,8 +461,11 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 			uint64		index;
 
 			LWLockAcquire(&poscan->downlinksPublish, LW_SHARED);
-			Assert(poscan->dsmHandle && !scan->dsmSeg);
-			scan->dsmSeg = dsm_attach(poscan->dsmHandle);
+			if (poscan->downlinksCount > 0)
+			{
+				Assert(poscan->dsmHandle && !scan->dsmSeg);
+				scan->dsmSeg = dsm_attach(poscan->dsmHandle);
+			}
 			if (scan->downlinksCount > 0)
 			{
 				index = pg_atomic_fetch_add_u64(&poscan->downlinkIndex, scan->downlinksCount);
