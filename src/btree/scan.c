@@ -458,7 +458,7 @@ switch_to_disk_scan(BTreeSeqScan *scan)
 		}
 		else
 		{
-			uint64		index;
+			uint64		index = 0;
 
 			LWLockAcquire(&poscan->downlinksPublish, LW_SHARED);
 			if (poscan->downlinksCount > 0)
