@@ -367,9 +367,9 @@ SELECT * FROM o_ddl_missing;
  10 |   | 2 |   | 
 (10 rows)
 
-ALTER TABLE o_ddl_missing 
-	DROP COLUMN m, 
-	ADD COLUMN p int4[] DEFAULT '{2, 4, 8}', 
+ALTER TABLE o_ddl_missing
+	DROP COLUMN m,
+	ADD COLUMN p int4[] DEFAULT '{2, 4, 8}',
 	ADD COLUMN r int4[];
 SELECT * FROM o_ddl_missing;
  i  | l | n |    o    |    p    | r 
@@ -650,7 +650,7 @@ select count(1) from o_test_multiple_analyzes;
 (1 row)
 
 SELECT regexp_replace(t, '[\d\.]+', 'x', 'g')
-FROM query_to_text('explain (analyze, buffers) 
+FROM query_to_text('explain (analyze, buffers)
 	select * from o_test_multiple_analyzes ORDER BY aid DESC LIMIT 10;') as t;
                                                  regexp_replace                                                 
 ----------------------------------------------------------------------------------------------------------------
@@ -731,9 +731,9 @@ CREATE TABLE o_test_unique_on_conflict (
 CREATE UNIQUE INDEX ON o_test_unique_on_conflict(key);
 INSERT INTO o_test_unique_on_conflict(key)
 	(SELECT key FROM generate_series (1, 1) key);
-INSERT INTO o_test_unique_on_conflict (key) 
+INSERT INTO o_test_unique_on_conflict (key)
 	SELECT * FROM generate_series(1, 1)
-	ON CONFLICT (key) DO UPDATE 
+	ON CONFLICT (key) DO UPDATE
 		SET key = o_test_unique_on_conflict.key + 100;
 SELECT * FROM o_test_unique_on_conflict;
  key 
@@ -768,8 +768,24 @@ CREATE TABLE o_test_inherits_2 (
 	val_2 int
 ) INHERITS (o_test_inherits_1) USING orioledb;
 ERROR:  INHERITS is not supported for orioledb tables.
+BEGIN;
+CREATE TABLE o_test(
+	id integer NOT NULL,
+	val text NOT NULL,
+	PRIMARY KEY(id),
+	UNIQUE(id, val)
+) USING orioledb;
+CREATE TABLE o_test_child(
+	id integer NOT NULL,
+	o_test_ID integer NOT NULL REFERENCES o_test (id),
+	PRIMARY KEY(id)
+) USING orioledb;
+INSERT INTO o_test(id, val) VALUES (1, 'hello');
+INSERT INTO o_test(id, val) VALUES (2, 'hey');
+DELETE FROM o_test where id = 1;
+COMMIT;
 DROP EXTENSION orioledb CASCADE;
-NOTICE:  drop cascades to 7 other objects
+NOTICE:  drop cascades to 9 other objects
 DETAIL:  drop cascades to table o_ddl_missing
 drop cascades to table o_test_add_column
 drop cascades to table o_test_multiple_analyzes
@@ -777,3 +793,5 @@ drop cascades to table o_unexisting_column
 drop cascades to table o_test_unique_on_conflict
 drop cascades to table o_test_update_set_renamed_column
 drop cascades to table o_test_inherits_1
+drop cascades to table o_test
+drop cascades to table o_test_child

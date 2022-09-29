@@ -159,9 +159,9 @@ ALTER TABLE o_ddl_missing ADD COLUMN n int4, ADD COLUMN o int4[];
 SELECT * FROM o_ddl_missing;
 UPDATE o_ddl_missing SET l = 5, n = 6, o = '{1, 5, 2}' WHERE i BETWEEN 3 AND 7;
 SELECT * FROM o_ddl_missing;
-ALTER TABLE o_ddl_missing 
-	DROP COLUMN m, 
-	ADD COLUMN p int4[] DEFAULT '{2, 4, 8}', 
+ALTER TABLE o_ddl_missing
+	DROP COLUMN m,
+	ADD COLUMN p int4[] DEFAULT '{2, 4, 8}',
 	ADD COLUMN r int4[];
 SELECT * FROM o_ddl_missing;
 
@@ -223,7 +223,7 @@ INSERT INTO o_test_multiple_analyzes
 BEGIN;
 select count(1) from o_test_multiple_analyzes;
 SELECT regexp_replace(t, '[\d\.]+', 'x', 'g')
-FROM query_to_text('explain (analyze, buffers) 
+FROM query_to_text('explain (analyze, buffers)
 	select * from o_test_multiple_analyzes ORDER BY aid DESC LIMIT 10;') as t;
 SELECT regexp_replace(t, '[\d\.]+', 'x', 'g')
 FROM query_to_text('explain (analyze, buffers)
@@ -270,9 +270,9 @@ CREATE UNIQUE INDEX ON o_test_unique_on_conflict(key);
 
 INSERT INTO o_test_unique_on_conflict(key)
 	(SELECT key FROM generate_series (1, 1) key);
-INSERT INTO o_test_unique_on_conflict (key) 
+INSERT INTO o_test_unique_on_conflict (key)
 	SELECT * FROM generate_series(1, 1)
-	ON CONFLICT (key) DO UPDATE 
+	ON CONFLICT (key) DO UPDATE
 		SET key = o_test_unique_on_conflict.key + 100;
 SELECT * FROM o_test_unique_on_conflict;
 
@@ -298,5 +298,22 @@ CREATE TABLE o_test_inherits_1 (
 CREATE TABLE o_test_inherits_2 (
 	val_2 int
 ) INHERITS (o_test_inherits_1) USING orioledb;
+
+BEGIN;
+CREATE TABLE o_test(
+	id integer NOT NULL,
+	val text NOT NULL,
+	PRIMARY KEY(id),
+	UNIQUE(id, val)
+) USING orioledb;
+CREATE TABLE o_test_child(
+	id integer NOT NULL,
+	o_test_ID integer NOT NULL REFERENCES o_test (id),
+	PRIMARY KEY(id)
+) USING orioledb;
+INSERT INTO o_test(id, val) VALUES (1, 'hello');
+INSERT INTO o_test(id, val) VALUES (2, 'hey');
+DELETE FROM o_test where id = 1;
+COMMIT;
 
 DROP EXTENSION orioledb CASCADE;
