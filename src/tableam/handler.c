@@ -452,7 +452,7 @@ orioledb_tuple_delete(ModifyTableState *mstate,
 
 	o_check_tbl_delete_mres(mres, descr, rinfo->ri_RelationDesc);
 
-	if (mres.self_modified)
+	if (mres.result == TM_SelfModified)
 	{
 		tmfd->xmax = GetCurrentTransactionId();
 		tmfd->cmax = GetCurrentCommandId(true);
@@ -463,16 +463,18 @@ orioledb_tuple_delete(ModifyTableState *mstate,
 		tmfd->cmax = InvalidCommandId;
 	}
 
-	if (mres.success)
+	if (mres.success || mres.result == TM_SelfModified)
 	{
 		Assert(mres.oldTuple != NULL);
 		if (returningSlot && mres.oldTuple != returningSlot)
 			ExecCopySlot(returningSlot, mres.oldTuple);
 
-		return mres.self_modified ? TM_SelfModified : TM_Ok;
+		return mres.result;
 	}
 
-	return mres.self_modified ? TM_SelfModified : TM_Deleted;
+	if (mres.result != TM_SelfModified)
+		mres.result = TM_Deleted;
+	return mres.result;
 }
 
 static TM_Result
@@ -599,11 +601,11 @@ orioledb_tuple_update(ModifyTableState *mstate, ResultRelInfo *rinfo,
 		/* ExecClearTuple(mres.oldTuple); */
 	}
 
-	if (mres.self_modified)
+	if (mres.result == TM_SelfModified)
 	{
 		tmfd->xmax = GetCurrentTransactionId();
 		tmfd->cmax = GetCurrentCommandId(true);
-		return TM_SelfModified;
+		return mres.result;
 	}
 	else
 	{
@@ -613,9 +615,10 @@ orioledb_tuple_update(ModifyTableState *mstate, ResultRelInfo *rinfo,
 
 	o_check_tbl_update_mres(mres, descr, rel, slot);
 
-	Assert(mres.success || mres.concurrent_delete);
-
-	return mres.oldTuple && !mres.concurrent_delete ? TM_Ok : TM_Deleted;
+	if (mres.result == TM_Invisible)
+		mres.result = TM_Deleted;
+	Assert(mres.success || mres.result == TM_Deleted);
+	return mres.oldTuple && mres.result != TM_Deleted ? TM_Ok : TM_Deleted;
 }
 
 static TM_Result

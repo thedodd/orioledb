@@ -66,7 +66,8 @@ typedef enum ConflictResolution
 {
 	ConflictResolutionOK,
 	ConflictResolutionRetry,
-	ConflictResolutionFound
+	ConflictResolutionFound,
+	ConflictResolutionInvisible
 } ConflictResolution;
 
 BTreeModifyCallbackInfo nullCallbackInfo =
@@ -168,6 +169,18 @@ retry:
 	context.leafTuphdr.chainHasLocks = false;
 	context.leafTuphdr.xactInfo = initXactInfo;
 
+	if (context.undoIsReserved && context.needsUndo)
+	{
+		UndoLocation lastUsedLocation;
+
+		lastUsedLocation = pg_atomic_read_u64(&undo_meta->lastUsedLocation);
+		if (first_saved_undo_location)
+		{
+			saved_undo_location = lastUsedLocation;
+			first_saved_undo_location = false;
+		}
+	}
+
 	blkno = pageFindContext->items[pageFindContext->index].blkno;
 	loc = pageFindContext->items[pageFindContext->index].locator;
 	page = O_GET_IN_MEMORY_PAGE(blkno);
@@ -190,6 +203,8 @@ retry:
 			return OBTreeModifyResultFound;
 		else if (resolution == ConflictResolutionRetry)
 			goto retry;
+		else if (resolution == ConflictResolutionInvisible)
+			return o_btree_modify_handle_tuple_not_found(&context);
 	}
 
 	Assert(page_is_locked(blkno));
@@ -398,14 +413,19 @@ wait_for_tuple(BTreeDescr *desc, OTuple tuple, OXid oxid, RowLockMode lockMode,
 static ConflictResolution
 o_btree_modify_handle_conflicts(BTreeModifyInternalContext *context)
 {
-	bool		haveRedundantRowLocks = false;
-	OBTreeFindPageContext *pageFindContext = context->pageFindContext;
-	BTreeDescr *desc = pageFindContext->desc;
-	OInMemoryBlkno blkno;
-	BTreePageItemLocator *loc;
-	Page		page;
-	OTuple		curTuple;
-	BTreeLeafTuphdr *tuphdr;
+	bool						haveRedundantRowLocks = false;
+	OBTreeFindPageContext	   *pageFindContext = context->pageFindContext;
+	BTreeDescr				   *desc = pageFindContext->desc;
+	OInMemoryBlkno				blkno;
+	BTreePageItemLocator	   *loc;
+	Page						page;
+	OTuple						curTuple;
+	BTreeLeafTuphdr			   *tuphdr;
+	CommitSeqNo					saved_csn = COMMITSEQNO_FROZEN;
+	bool						was_deleted = false;
+	BTreeLeafTuphdr			   *loop_tuphdr_ptr;
+	BTreeLeafTuphdr				loop_tuphdr;
+	OTuple						loop_tuple = {0};
 
 	blkno = pageFindContext->items[pageFindContext->index].blkno;
 	loc = &pageFindContext->items[pageFindContext->index].locator;
@@ -527,6 +547,18 @@ o_btree_modify_handle_conflicts(BTreeModifyInternalContext *context)
 
 				Assert(cbAction <= OBTreeCallbackActionXidExit);
 
+				loop_tuphdr = context->conflictTupHdr;
+				while ((!XACT_INFO_IS_FINISHED(loop_tuphdr.xactInfo) ||
+						loop_tuphdr.chainHasLocks) &&
+						UndoLocationIsValid(loop_tuphdr.undoLocation) &&
+						UNDO_REC_EXISTS(loop_tuphdr.undoLocation))
+				{
+					was_deleted = was_deleted || loop_tuphdr.deleted;
+					get_prev_leaf_header_from_undo(&loop_tuphdr, false);
+				}
+
+				saved_csn = XACT_INFO_MAP_CSN(loop_tuphdr.xactInfo);
+
 				if (cbAction == OBTreeCallbackActionXidWait)
 					wait_for_tuple(desc, curTuple, oxid,
 								   context->lockMode,
@@ -539,13 +571,30 @@ o_btree_modify_handle_conflicts(BTreeModifyInternalContext *context)
 					Assert(cbAction == OBTreeCallbackActionXidNoWait);
 				}
 
+				BTREE_PAGE_READ_LEAF_ITEM(loop_tuphdr_ptr, loop_tuple, page,
+										  loc);
+				loop_tuphdr = *loop_tuphdr_ptr;
+				while ((!XACT_INFO_IS_FINISHED(loop_tuphdr.xactInfo) ||
+						loop_tuphdr.chainHasLocks) &&
+						UndoLocationIsValid(loop_tuphdr.undoLocation) &&
+						UNDO_REC_EXISTS(loop_tuphdr.undoLocation))
+				{
+					get_prev_leaf_header_from_undo(&loop_tuphdr, false);
+				}
+
+				if (was_deleted &&
+					((saved_csn ==
+						XACT_INFO_MAP_CSN(loop_tuphdr.xactInfo)) ||
+						loop_tuphdr.deleted))
+					was_deleted = false;
+
 				refind_page(pageFindContext,
 							context->key,
 							context->keyType,
 							0,
 							pageFindContext->items[pageFindContext->index].blkno,
 							pageFindContext->items[pageFindContext->index].pageChangeCount);
-				return ConflictResolutionRetry;
+				return was_deleted ? ConflictResolutionInvisible : ConflictResolutionRetry;
 			}
 
 			/* Update tuple and header pointer after page_item_rollback() */
@@ -711,12 +760,6 @@ o_btree_modify_add_undo_record(BTreeModifyInternalContext *context)
 								O_PAGE_GET_CHANGE_COUNT(page),
 								&undoLocation);
 	}
-
-	if (first_saved_undo_location)
-	{
-		saved_undo_location = undoLocation;
-		first_saved_undo_location = false;
-	}
 }
 
 static OBTreeModifyResult
@@ -797,12 +840,6 @@ o_btree_modify_delete(BTreeModifyInternalContext *context)
 	else
 	{
 		undoLocation = InvalidUndoLocation;
-	}
-
-	if (first_saved_undo_location)
-	{
-		saved_undo_location = undoLocation;
-		first_saved_undo_location = false;
 	}
 
 	START_CRIT_SECTION();

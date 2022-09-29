@@ -79,8 +79,8 @@ static ProcessUtility_hook_type next_ProcessUtility_hook = NULL;
 static object_access_hook_type old_objectaccess_hook = NULL;
 static planner_hook_type prev_planner_hook = NULL;
 
-bool		first_saved_undo_location = true;
-UndoLocation saved_undo_location;
+bool			first_saved_undo_location = true;
+UndoLocation	saved_undo_location;
 
 static void orioledb_utility_command(PlannedStmt *pstmt,
 									 const char *queryString,

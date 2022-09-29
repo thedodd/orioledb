@@ -30,14 +30,13 @@ typedef struct OTableModifyResult
 {
 	/* result of the modification */
 	bool		success;
+	TM_Result	result;
 	/* a failed modification action */
 	BTreeOperationType action;
 	/* an index number on which the modification action has been failed */
 	OIndexNumber failedIxNum;
 	/* the modified tuple */
 	TupleTableSlot *oldTuple;
-	bool		self_modified;
-	bool		concurrent_delete;
 } OTableModifyResult;
 
 typedef struct
