@@ -38,6 +38,7 @@ typedef struct
 	ORelOids	oids;
 	OInMemoryBlkno blkno;
 	uint32		pageChangeCount;
+	bool		reinserted;
 	BTreeLeafTuphdr tuphdr;
 } BTreeModifyUndoStackItem;
 
@@ -324,6 +325,7 @@ make_undo_record(BTreeDescr *desc, OTuple tuple, bool is_tuple,
 	item->blkno = blkno;
 	item->pageChangeCount = pageChangeCount;
 	item->oids = desc->oids;
+	item->reinserted = action == BTreeOperationDeleteReinsert;
 
 	if (action == BTreeOperationUpdate || !is_tuple)
 	{
@@ -1001,6 +1003,88 @@ clean_chain_has_locks_flag(UndoLocation location, BTreeLeafTuphdr *pageTuphdr,
 	}
 }
 
+#include "tableam/toast.h"
+#include "utils/lsyscache.h"
+
+static void
+o_tuple_print(TupleDesc tupDesc, OTupleFixedFormatSpec *spec,
+			  FmgrInfo *outputFns, StringInfo buf, OTuple tup,
+			  Datum *values, bool *nulls)
+{
+	Form_pg_attribute atti;
+	int			attnum,
+				i;
+
+	appendStringInfo(buf, "(");
+
+	for (i = 0; i < tupDesc->natts; i++)
+	{
+		if (i > 0)
+			appendStringInfo(buf, ", ");
+		attnum = i + 1;
+		values[i] = o_fastgetattr(tup, attnum, tupDesc, spec, &nulls[i]);
+		if (nulls[i])
+		{
+			appendStringInfo(buf, "null");
+		}
+		else
+		{
+			atti = TupleDescAttr(tupDesc, i);
+			if (!atti->attbyval && atti->attlen && !nulls[i])
+			{
+				Pointer		p = DatumGetPointer(values[i]);
+
+				if (IS_TOAST_POINTER(p))
+				{
+					appendStringInfo(buf, "TOASTed");
+					continue;
+				}
+			}
+			appendStringInfo(buf, "'%s'",
+							 OutputFunctionCall(&outputFns[i], values[i]));
+		}
+	}
+
+	appendStringInfo(buf, ")");
+}
+
+void log_o_tuple(int level, char *title, TupleDesc tupdesc,
+				 OTupleFixedFormatSpec *spec, OTuple tup)
+{
+	if (!O_TUPLE_IS_NULL(tup))
+	{
+		FmgrInfo *outputFns;
+		StringInfoData buf;
+		Datum *values;
+		bool *nulls;
+		int i;
+
+		initStringInfo(&buf);
+		outputFns = (FmgrInfo *)palloc(sizeof(FmgrInfo) *
+										tupdesc->natts);
+		values = (Datum *)palloc(sizeof(Datum) * tupdesc->natts);
+		nulls = (bool *)palloc(sizeof(bool) * tupdesc->natts);
+		for (i = 0; i < tupdesc->natts; i++)
+		{
+			Oid			output;
+			bool		varlena;
+
+			getTypeOutputInfo(tupdesc->attrs[i].atttypid,
+								&output, &varlena);
+			fmgr_info(output, &outputFns[i]);
+		}
+		o_tuple_print(tupdesc, spec,
+						outputFns, &buf, tup,
+						values, nulls);
+		elog(level, "%s: %s", title, buf.data);
+		pfree(buf.data);
+		pfree(outputFns);
+		pfree(values);
+		pfree(nulls);
+	}
+	else
+		elog(level, "%s: (NULL)", title);
+}
 
 /*
  * Check for row-level lock conflict
@@ -1021,7 +1105,8 @@ row_lock_conflicts(BTreeLeafTuphdr *pageTuphdr,
 				   UndoLocation *conflictUndoLocation,
 				   RowLockMode mode, OXid my_oxid, OInMemoryBlkno blkno,
 				   UndoLocation savepointUndoLocation,
-				   bool *redundant_row_locks, bool *already_locked)
+				   bool *redundant_row_locks, bool *already_locked,
+				   bool *reinserted)
 {
 	OTupleXactInfo xactInfo;
 	bool		xactIsfinished;
@@ -1037,15 +1122,23 @@ row_lock_conflicts(BTreeLeafTuphdr *pageTuphdr,
 	lastLockOnlyUndoLocation = InvalidUndoLocation;
 	xactInfo = conflictTuphdr->xactInfo;
 	xactIsfinished = XACT_INFO_IS_FINISHED(xactInfo);
+	elog(WARNING, "xactIsfinished: %c", xactIsfinished ? 'Y' : 'N');
 	foundFinished = xactIsfinished;
 	undoLocation = conflictTuphdr->undoLocation;
+	elog(WARNING, "undoLocation EX: %c", UNDO_REC_EXISTS(undoLocation) ? 'Y' : 'N');
+	if (UNDO_REC_EXISTS(undoLocation))
+		elog(WARNING, "undoLocation: %lu", undoLocation);
+	elog(WARNING, "retainedUndoLocation: %lu", retainedUndoLocation);
 
 	while (conflictTuphdr->chainHasLocks ||
 		   XACT_INFO_IS_LOCK_ONLY(xactInfo) ||
-		   !xactIsfinished)
+		   !xactIsfinished ||
+		   (UndoLocationIsValid(undoLocation) &&
+		    undoLocation >= retainedUndoLocation))
 	{
 		bool		prevChainHasLocks = false;
 		bool		delete_record = false;
+		elog(WARNING, "RL CONFLICT: LOOP STEP START");
 
 		if (XACT_INFO_IS_LOCK_ONLY(xactInfo) &&
 			XACT_INFO_GET_OXID(xactInfo) == my_oxid)
@@ -1086,9 +1179,11 @@ row_lock_conflicts(BTreeLeafTuphdr *pageTuphdr,
 				}
 				else
 				{
+					elog(WARNING, "RL CONFLICT 1: return true");
 					return true;
 				}
 			}
+			elog(WARNING, "delete_record: %c", delete_record ? 'Y' : 'N');
 
 			if (delete_record && undoLocation >= retainedUndoLocation)
 			{
@@ -1133,7 +1228,32 @@ row_lock_conflicts(BTreeLeafTuphdr *pageTuphdr,
 			if (XACT_INFO_GET_OXID(xactInfo) == my_oxid &&
 				XACT_INFO_GET_LOCK_MODE(xactInfo) >= mode)
 				*already_locked = true;
+			elog(WARNING, "RL CONFLICT 2: return true: %c", *already_locked ? 'Y' : 'N');
 			return true;
+		}
+		else if (xactIsfinished && (UndoLocationIsValid(undoLocation) &&
+									undoLocation >= retainedUndoLocation))
+		{
+			OTuple	tuple = {0};
+			extern OIndexDescr *saved_descr;
+			BTreeLeafTuphdr saved_conflictTuphdr = *conflictTuphdr;
+			get_prev_leaf_header_and_tuple_from_undo_reinserted(conflictTuphdr, &tuple, 0, reinserted);
+			if (saved_descr)
+			{
+				if (!O_TUPLE_IS_NULL(tuple))
+					log_o_tuple(WARNING, "REINSERTED TUPLE",
+								saved_descr->nonLeafTupdesc,
+								&saved_descr->nonLeafSpec, tuple);
+			}
+			if (!O_TUPLE_IS_NULL(tuple))
+				pfree(tuple.data);
+			elog(WARNING, "REINSERTED: %c", *reinserted ? 'Y' : 'N');
+			delete_record = true;
+			if (*reinserted)
+			{
+				*conflictTuphdr = saved_conflictTuphdr;
+				return false;
+			}
 		}
 
 		if (!UndoLocationIsValid(undoLocation) ||
@@ -1153,6 +1273,7 @@ row_lock_conflicts(BTreeLeafTuphdr *pageTuphdr,
 
 			*conflictTuphdr = finishedTuphdr;
 			*conflictUndoLocation = finishedUndoLocation;
+			elog(WARNING, "RL CONFLICT 3: return false");
 			return false;
 		}
 
@@ -1199,10 +1320,12 @@ row_lock_conflicts(BTreeLeafTuphdr *pageTuphdr,
 			finishedUndoLocation = *conflictUndoLocation;
 			foundFinished = true;
 		}
+		elog(WARNING, "RL CONFLICT: LOOP STEP END");
 	}
 
 	*conflictTuphdr = finishedTuphdr;
 	*conflictUndoLocation = finishedUndoLocation;
+	elog(WARNING, "RL CONFLICT 4: return false");
 	return false;
 }
 
@@ -1345,9 +1468,10 @@ get_prev_leaf_header_from_undo(BTreeLeafTuphdr *tuphdr, bool inPage)
 }
 
 void
-get_prev_leaf_header_and_tuple_from_undo(BTreeLeafTuphdr *tuphdr,
-										 OTuple *tuple,
-										 LocationIndex sizeAvailable)
+get_prev_leaf_header_and_tuple_from_undo_reinserted(BTreeLeafTuphdr *tuphdr,
+													OTuple *tuple,
+													LocationIndex sizeAvailable,
+													bool *reinserted)
 {
 	BTreeModifyUndoStackItem item;
 	LocationIndex tupleSize;
@@ -1359,11 +1483,18 @@ get_prev_leaf_header_and_tuple_from_undo(BTreeLeafTuphdr *tuphdr,
 			  sizeof(BTreeModifyUndoStackItem),
 			  (Pointer) &item);
 	Assert(item.header.type == ModifyUndoItemType);
-	Assert(item.action == BTreeOperationUpdate);
+	Assert(item.action == BTreeOperationUpdate ||
+		   item.action == BTreeOperationDeleteReinsert ||
+		   item.action == BTreeOperationDelete);
+
+	if (item.action == BTreeOperationDelete)
+		return get_prev_leaf_header_from_undo(tuphdr, false);
 
 	*tuphdr = item.tuphdr;
 	tuple->formatFlags = tuphdr->formatFlags;
 	tupleSize = item.header.itemSize - sizeof(BTreeModifyUndoStackItem);
+	if (reinserted)
+		*reinserted = item.reinserted;
 	if (sizeAvailable == 0)
 		tuple->data = palloc(tupleSize);
 	Assert(sizeAvailable == 0 || sizeAvailable >= tupleSize);
@@ -1371,6 +1502,14 @@ get_prev_leaf_header_and_tuple_from_undo(BTreeLeafTuphdr *tuphdr,
 			  tupleSize,
 			  tuple->data);
 	tuphdr->formatFlags = 0;
+}
+
+void
+get_prev_leaf_header_and_tuple_from_undo(BTreeLeafTuphdr *tuphdr,
+										 OTuple *tuple,
+										 LocationIndex sizeAvailable)
+{
+	get_prev_leaf_header_and_tuple_from_undo_reinserted(tuphdr, tuple, sizeAvailable, NULL);
 }
 
 void

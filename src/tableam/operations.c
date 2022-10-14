@@ -838,8 +838,8 @@ o_tbl_indices_reinsert(OTableDescr *descr,
 	o_btree_load_shmem(&GET_PRIMARY(descr)->desc);
 
 	O_TUPLE_SET_NULL(nullTup);
-	modify_result = o_btree_modify(&GET_PRIMARY(descr)->desc, BTreeOperationDelete,
-								   nullTup, BTreeKeyNone,
+	modify_result = o_btree_modify(&GET_PRIMARY(descr)->desc, BTreeOperationDeleteReinsert,
+								   newTup, BTreeKeyLeafTuple,
 								   (Pointer) oldPkey, BTreeKeyBound,
 								   oxid, csn, RowLockUpdate,
 								   hint, &deleteCallbackInfo);
@@ -1435,7 +1435,6 @@ o_update_callback(BTreeDescr *descr,
 	TupleTableSlot		   *inputslot;
 	bool					modified;
 	uint32					version = 0;
-	CommitSeqNo				old_csn = o_arg->csn;
 	bool					after_cmd_started = false;
 
 	if (descr->type != oIndexPrimary)
@@ -1454,6 +1453,9 @@ o_update_callback(BTreeDescr *descr,
 	modified = o_callback_is_modified(o_arg->oxid, o_arg->csn, xactInfo);
 	o_arg->tup_undo_location = location;
 
+	elog(WARNING, "o_arg->csn OLD: %lu", o_arg->csn);
+	elog(WARNING, "IS_FINISHED: %c", XACT_INFO_IS_FINISHED(xactInfo) ? 'Y' : 'N');
+	elog(WARNING, "modified: %c", modified ? 'Y' : 'N');
 	if (XACT_INFO_IS_FINISHED(xactInfo))
 		o_arg->csn = modified ? (XACT_INFO_MAP_CSN(xactInfo) + 1) : o_arg->csn;
 	else
@@ -1461,6 +1463,8 @@ o_update_callback(BTreeDescr *descr,
 		o_arg->csn = COMMITSEQNO_INPROGRESS;
 		o_arg->oxid = XACT_INFO_GET_OXID(xactInfo);
 	}
+	elog(WARNING, "o_arg->csn NEW: %lu", o_arg->csn);
+	elog(WARNING, "UndoLocationIsValid: %c", UndoLocationIsValid(o_arg->tup_undo_location) ? 'Y' : 'N');
 	if (UndoLocationIsValid(o_arg->tup_undo_location))
 	{
 		if (o_arg->deleted)

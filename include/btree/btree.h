@@ -80,7 +80,8 @@ typedef enum BTreeOperationType
 	BTreeOperationInsert,
 	BTreeOperationLock,
 	BTreeOperationUpdate,
-	BTreeOperationDelete
+	BTreeOperationDelete,
+	BTreeOperationDeleteReinsert
 } BTreeOperationType;
 
 typedef struct

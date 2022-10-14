@@ -76,7 +76,8 @@ extern bool row_lock_conflicts(BTreeLeafTuphdr *pageTuphdr,
 							   RowLockMode mode,
 							   OXid my_oxid, OInMemoryBlkno blkno,
 							   UndoLocation savepointUndoLocation,
-							   bool *redundant_row_locks, bool *already_locked);
+							   bool *redundant_row_locks, bool *already_locked,
+							   bool *reinserted);
 extern void remove_redundant_row_locks(BTreeLeafTuphdr *tuphdr_ptr,
 									   BTreeLeafTuphdr *conflictTuphdrPtr,
 									   UndoLocation *conflictTupHdrUndoLocation,
@@ -101,6 +102,10 @@ extern void get_prev_leaf_header_from_undo(BTreeLeafTuphdr *tuphdr,
 extern void get_prev_leaf_header_and_tuple_from_undo(BTreeLeafTuphdr *tuphdr,
 													 OTuple *tuple,
 													 LocationIndex sizeAvailable);
+extern void get_prev_leaf_header_and_tuple_from_undo_reinserted(BTreeLeafTuphdr *tuphdr,
+																OTuple *tuple,
+																LocationIndex sizeAvailable,
+																bool *reinserted);
 extern void update_leaf_header_in_undo(BTreeLeafTuphdr *tuphdr, UndoLocation location);
 extern void add_undo_truncate_relnode(ORelOids oldOids, ORelOids *oldTreeOids,
 									  int oldNumTreeOids,

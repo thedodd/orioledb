@@ -554,12 +554,21 @@ orioledb_tuple_update(ModifyTableState *mstate, ResultRelInfo *rinfo,
 
 	mres = o_tbl_update(descr, slot, estate, &old_pkey, rel,
 						oxid, snapshot->snapshotcsn, &hint, &marg);
+	elog(WARNING, "mres.result 0: %d", mres.result);
 
+	// EvalPlanQualBegin(marg.epqstate);
+	elog(WARNING, "recheckestate: %p", marg.epqstate->recheckestate);
 	if (mres.success && mres.action == BTreeOperationLock)
+	// if (mres.success)
 	{
 		TupleTableSlot *epqslot;
 		bool		partition_constraint_failed;
 
+		// epqslot = EvalPlanQualSlot(marg.epqstate,
+		// 						   rinfo->ri_RelationDesc,
+		// 						   rinfo->ri_RangeTableIndex);
+		// copy_tuple_to_slot(tup, inputslot, o_arg->descr, o_arg->csn,
+		// 				   PrimaryIndexNumber, hint);
 		epqslot = EvalPlanQualNext(marg.epqstate);
 		if (TupIsNull(epqslot))
 			/* Tuple not passing quals anymore, exiting... */
@@ -594,12 +603,17 @@ orioledb_tuple_update(ModifyTableState *mstate, ResultRelInfo *rinfo,
 		if (rel->rd_att->constr)
 			ExecConstraints(rinfo, slot, estate);
 
-		tts_orioledb_fill_key_bound(mres.oldTuple, GET_PRIMARY(descr), &old_pkey);
-		mres = o_tbl_update(descr, slot, estate, &old_pkey, rel,
-							oxid, marg.csn, &hint, &marg);
-		Assert(mres.action != BTreeOperationLock);
+		if (mres.action == BTreeOperationLock)
+		{
+			tts_orioledb_fill_key_bound(mres.oldTuple, GET_PRIMARY(descr), &old_pkey);
+			mres = o_tbl_update(descr, slot, estate, &old_pkey, rel,
+								oxid, marg.csn, &hint, &marg);
+			Assert(mres.action != BTreeOperationLock);
+		}
 		/* ExecClearTuple(mres.oldTuple); */
 	}
+
+	elog(WARNING, "mres.result 1: %d", mres.result);
 
 	if (mres.result == TM_SelfModified)
 	{

@@ -348,7 +348,11 @@ set_my_reserved_location(void)
 		if (!UndoLocationIsValid(pg_atomic_read_u64(&curProcData->reservedUndoLocation)))
 			pg_atomic_write_u64(&curProcData->reservedUndoLocation, lastUsedLocation);
 		if (!UndoLocationIsValid(pg_atomic_read_u64(&curProcData->transactionUndoRetainLocation)))
+		{
+			// Snapshot	snapshot = GetActiveSnapshot();
+			// pg_atomic_write_u64(&curProcData->transactionUndoRetainLocation, snapshot->undoLocationPhNode.undoLocation);
 			pg_atomic_write_u64(&curProcData->transactionUndoRetainLocation, lastUsedLocation);
+		}
 
 		wait_for_even_changecount();
 
@@ -372,7 +376,7 @@ set_my_retain_location(void)
 {
 	ODBProcData *curProcData = GET_CUR_PROCDATA();
 	UndoLocation curSnapshotRetainUndoLocation,
-				retainUndoLocation;
+				 retainUndoLocation;
 
 	while (true)
 	{

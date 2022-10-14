@@ -310,6 +310,7 @@ print_page_contents_recursive(BTreeDescr *desc, OInMemoryBlkno blkno,
 			loc.itemOffset = k;
 			if (O_PAGE_IS(p, LEAF))
 			{
+				bool reinserted = false;
 				BTreeLeafTuphdr tuphdr,
 						   *pageTuphdr;
 				OTuple		tuple;
@@ -357,7 +358,8 @@ print_page_contents_recursive(BTreeDescr *desc, OInMemoryBlkno blkno,
 								break;
 						}
 						needsComma = true;
-						btree_print_backend_id(XACT_INFO_GET_OXID(tuphdr.xactInfo), outbuf, printData);
+						appendStringInfo(outbuf, ", oxid = %lu", XACT_INFO_GET_OXID(tuphdr.xactInfo));
+						// btree_print_backend_id(XACT_INFO_GET_OXID(tuphdr.xactInfo), outbuf, printData);
 					}
 
 					if (tuphdr.deleted)
@@ -367,6 +369,15 @@ print_page_contents_recursive(BTreeDescr *desc, OInMemoryBlkno blkno,
 						else
 							needsComma = true;
 						appendStringInfo(outbuf, "deleted");
+					}
+
+					if (reinserted)
+					{
+						if (needsComma)
+							appendStringInfo(outbuf, ", ");
+						else
+							needsComma = true;
+						appendStringInfo(outbuf, "reinserted");
 					}
 					needsComma |= btree_print_undo_location((UndoLocation) tuphdr.undoLocation, outbuf, printData, needsComma);
 
@@ -395,20 +406,28 @@ print_page_contents_recursive(BTreeDescr *desc, OInMemoryBlkno blkno,
 							appendStringInfo(outbuf, ", ");
 						else
 							needsComma = true;
-						appendStringInfo(outbuf, "tuple = ");
-						tuplePrintFunc(desc, outbuf, tuple, printArg);
+						if (reinserted)
+						{
+							appendStringInfo(outbuf, "key = ");
+							keyPrintFunc(desc, outbuf, tuple, printArg);
+						}
+						else
+						{
+							appendStringInfo(outbuf, "tuple = ");
+							tuplePrintFunc(desc, outbuf, tuple, printArg);
+						}
 					}
 					appendStringInfo(outbuf, "\n");
 
-					if ((!XACT_INFO_IS_FINISHED(tuphdr.xactInfo) || tuphdr.chainHasLocks) &&
-						UndoLocationIsValid(tuphdr.undoLocation) &&
+					if (UndoLocationIsValid(tuphdr.undoLocation) &&
 						UNDO_REC_EXISTS(tuphdr.undoLocation))
 					{
 						if (inUndo && !O_TUPLE_IS_NULL(tuple))
 							pfree(tuple.data);
-						if (!tuphdr.deleted && !XACT_INFO_IS_LOCK_ONLY(tuphdr.xactInfo))
+						if (!XACT_INFO_IS_LOCK_ONLY(tuphdr.xactInfo))
 						{
-							get_prev_leaf_header_and_tuple_from_undo(&tuphdr, &tuple, 0);
+							O_TUPLE_SET_NULL(tuple);
+							get_prev_leaf_header_and_tuple_from_undo_reinserted(&tuphdr, &tuple, 0, &reinserted);
 						}
 						else
 						{
@@ -652,24 +671,44 @@ btree_print_undo_location(UndoLocation undoLocation, StringInfo outbuf,
 	if (printType != BTreeNotPrint)
 	{
 		/* print undo location only if it is valid */
-		if (UndoLocationIsValid(undoLocation) &&
-			(((UNDO_REC_EXISTS(undoLocation) && printType == BTreePrintAbsolute)) ||
-			 ((UNDO_REC_XACT_RETAIN(undoLocation) && printType == BTreePrintRelative))))
-		{
-			/*
-			 * if ascending number option set, then it gets number of undo
-			 * location in sorted list
-			 */
-			if (printData->options->undoLogLocationPrintType ==
-				BTreePrintRelative)
-			{
-				printedUndoLoc = lundo_location(printData->undosList, undoLocation);
-				Assert(!printedUndoLoc ||
-					   printedUndoLoc != list_length(printData->undosList));
-			}
+		if (UndoLocationIsValid(undoLocation)){// &&
+		// 	(((UNDO_REC_EXISTS(undoLocation) && printType == BTreePrintAbsolute)) ||
+		// 	 ((UNDO_REC_XACT_RETAIN(undoLocation) && printType == BTreePrintRelative))))
+		// {
+		// 	/*
+		// 	 * if ascending number option set, then it gets number of undo
+		// 	 * location in sorted list
+		// 	 */
+		// 	if (printData->options->undoLogLocationPrintType ==
+		// 		BTreePrintRelative)
+		// 	{
+		// 		printedUndoLoc = lundo_location(printData->undosList, undoLocation);
+		// 		Assert(!printedUndoLoc ||
+		// 			   printedUndoLoc != list_length(printData->undosList));
+		// 	}
 			if (addComma)
 				appendStringInfo(outbuf, ", ");
-			appendStringInfo(outbuf, "undoLocation = " UINT64_FORMAT, printedUndoLoc);
+			uint64 mprl = pg_atomic_read_u64(&undo_meta->minProcRetainLocation);
+			uint64 mptrl = pg_atomic_read_u64(&undo_meta->minProcTransactionRetainLocation);
+			uint64 mpresl = pg_atomic_read_u64(&undo_meta->minProcReservedLocation);
+			uint64 crsl = pg_atomic_read_u64(&undo_meta->checkpointRetainStartLocation);
+			uint64 crel = pg_atomic_read_u64(&undo_meta->checkpointRetainEndLocation);
+			UndoLocation ul = undoLocation;
+			appendStringInfo(outbuf,
+							 "undoLocation = " UINT64_FORMAT
+							 " %c"
+							 ", %c " UINT64_FORMAT
+							 ", %c " UINT64_FORMAT
+							 ", %c " UINT64_FORMAT
+							 ", %c " UINT64_FORMAT
+							 ", %c " UINT64_FORMAT,
+							 printedUndoLoc,
+							 UNDO_REC_EXISTS(undoLocation) ? 'Y' : 'N',
+							 ul > mprl ? '>' : ul < mprl ? '<' : '=', mprl,
+							 ul > mptrl ? '>' : ul < mptrl ? '<' : '=', mptrl,
+							 ul > mpresl ? '>' : ul < mpresl ? '<' : '=', mpresl,
+							 ul > crsl ? '>' : ul < crsl ? '<' : '=', crsl,
+							 ul > crel ? '>' : ul < crel ? '<' : '=', crel);
 			return true;
 		}
 	}

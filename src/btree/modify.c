@@ -44,6 +44,7 @@ typedef struct
 	BTreeLeafTuphdr leafTuphdr;
 	BTreeLeafTuphdr conflictTupHdr;
 	bool		replace;
+	bool		reinsert;
 	UndoLocation conflictUndoLocation;
 	OXid		opOxid;
 	CommitSeqNo opCsn;
@@ -67,6 +68,7 @@ typedef enum ConflictResolution
 	ConflictResolutionOK,
 	ConflictResolutionRetry,
 	ConflictResolutionFound,
+	ConflictResolutionReinserted,
 	ConflictResolutionInvisible
 } ConflictResolution;
 
@@ -100,6 +102,15 @@ static OBTreeModifyResult o_btree_normal_modify(BTreeDescr *desc,
 												RowLockMode lockMode,
 												BTreeLocationHint *hint,
 												BTreeModifyCallbackInfo *callbackInfo);
+
+OIndexDescr *saved_descr = NULL;
+
+#include "tableam/toast.h"
+#include "utils/lsyscache.h"
+#include "tableam/key_range.h"
+
+extern void log_o_tuple(int level, char *title, TupleDesc tupdesc,
+				 OTupleFixedFormatSpec *spec, OTuple tup);
 
 /*
  * Perform modification of btree leaf tuple, when page is alredy located
@@ -139,6 +150,11 @@ o_btree_modify_internal(OBTreeFindPageContext *pageFindContext,
 	context.isAlreadyLocked = false;
 	context.savepointUndoLocation = get_subxact_undo_location();
 	context.callbackInfo = callbackInfo;
+	if (action == BTreeOperationDeleteReinsert)
+	{
+		context.reinsert = true;
+		action = BTreeOperationDelete;
+	}
 
 	Assert(callbackInfo);
 	Assert((action != BTreeOperationInsert) || (tupleType == BTreeKeyLeafTuple));
@@ -191,18 +207,63 @@ retry:
 
 	BTREE_PAGE_READ_LEAF_ITEM(tuphdr, curTuple, page, &loc);
 	Assert(tuphdr != NULL);
+	if (!O_TUPLE_IS_NULL(curTuple) && desc->oids.datoid != SYS_TREES_DATOID)
+	{
+		OIndexDescr *descr = desc->arg;
+		elog(WARNING, "keyType: %d", keyType);
+		if (keyType == BTreeKeyLeafTuple)
+		{
+			OTuple loc_tup = *(OTuple *) key;
+			log_o_tuple(WARNING, "MODIFY INTERNAL CMP KEY",
+						descr->nonLeafTupdesc, &descr->nonLeafSpec, loc_tup);
+		}
+		else if (keyType == BTreeKeyBound)
+		{
+			OBTreeKeyBound *loc_key = (OBTreeKeyBound *) key;
+			for (int i = 0; i < loc_key->nkeys; i++)
+			{
+				elog(WARNING, "MODIFY INTERNAL CMP KEY[%d]: %x %lu", i,
+					 loc_key->keys[i].flags,
+					 loc_key->keys[i].value);
+			}
+
+		}
+
+		log_o_tuple(WARNING, "MODIFY INTERNAL CMP CURTUPLE",
+					descr->nonLeafTupdesc, &descr->nonLeafSpec, curTuple);
+	}
 	context.cmp = o_btree_cmp(desc, key, keyType, &curTuple, BTreeKeyLeafTuple);
 
+	elog(WARNING, "CMP: %d", context.cmp);
 	if (context.cmp == 0)
 	{
 		ConflictResolution resolution;
 
+		elog(WARNING, "BEFORE HANDLE CONFLICTS: %u %d %d",
+			 pageFindContext->items[pageFindContext->index].blkno,
+			 pageFindContext->items[pageFindContext->index].locator.chunkOffset,
+			 pageFindContext->items[pageFindContext->index].locator.itemOffset);
 		resolution = o_btree_modify_handle_conflicts(&context);
+		elog(WARNING, "AFTER HANDLE CONFLICTS: %u %d %d",
+			 pageFindContext->items[pageFindContext->index].blkno,
+			 pageFindContext->items[pageFindContext->index].locator.chunkOffset,
+			 pageFindContext->items[pageFindContext->index].locator.itemOffset);
+
+		elog(WARNING, "resolution: %d", resolution);
+		elog(WARNING, "action: %d", action);
 
 		if (resolution == ConflictResolutionFound)
 			return OBTreeModifyResultFound;
 		else if (resolution == ConflictResolutionRetry)
 			goto retry;
+		else if (resolution == ConflictResolutionReinserted)
+		{
+			// key = context.key;
+			elog(WARNING, "OLD keyType: %d", keyType);
+			keyType = context.keyType;
+			elog(WARNING, "NEW keyType: %d", keyType);
+			goto retry;
+		}
 		else if (resolution == ConflictResolutionInvisible)
 			return o_btree_modify_handle_tuple_not_found(&context);
 	}
@@ -421,11 +482,7 @@ o_btree_modify_handle_conflicts(BTreeModifyInternalContext *context)
 	Page						page;
 	OTuple						curTuple;
 	BTreeLeafTuphdr			   *tuphdr;
-	CommitSeqNo					saved_csn = COMMITSEQNO_FROZEN;
-	bool						was_deleted = false;
-	BTreeLeafTuphdr			   *loop_tuphdr_ptr;
-	BTreeLeafTuphdr				loop_tuphdr;
-	OTuple						loop_tuple = {0};
+	bool						conflict_reinserted = false;
 
 	blkno = pageFindContext->items[pageFindContext->index].blkno;
 	loc = &pageFindContext->items[pageFindContext->index].locator;
@@ -433,12 +490,18 @@ o_btree_modify_handle_conflicts(BTreeModifyInternalContext *context)
 
 	BTREE_PAGE_READ_LEAF_ITEM(tuphdr, curTuple, page, loc);
 
+	elog(WARNING, "saved_descr: %u", context->pageFindContext->desc->oids.relnode);
+	if (desc->oids.datoid == SYS_TREES_DATOID)
+		saved_descr = NULL;
+	else
+		saved_descr = desc->arg;
 	if (row_lock_conflicts(tuphdr,
 						   &context->conflictTupHdr,
 						   &context->conflictUndoLocation,
 						   context->lockMode, context->opOxid,
 						   blkno, context->savepointUndoLocation,
-						   &haveRedundantRowLocks, &context->isAlreadyLocked))
+						   &haveRedundantRowLocks, &context->isAlreadyLocked,
+						   &conflict_reinserted))
 	{
 		OTupleXactInfo xactInfo = context->conflictTupHdr.xactInfo;
 		OXid		oxid = XACT_INFO_GET_OXID(xactInfo);
@@ -525,8 +588,16 @@ o_btree_modify_handle_conflicts(BTreeModifyInternalContext *context)
 				 * Conflicting transaction is in-progress.  If the callback is
 				 * provided, ask it what to do.  Just wait otherwise.
 				 */
-				OBTreeWaitCallbackAction cbAction = OBTreeCallbackActionXidWait;
+				OBTreeWaitCallbackAction	cbAction;
+				bool						was_deleted = false;
+				bool						was_reinserted = false;
+				BTreeLeafTuphdr			   *loop_tuphdr_ptr;
+				BTreeLeafTuphdr				loop_tuphdr;
+				bool						allocated = false;
+				OTuple						tuple = {0};
+				bool						cur_deleted;
 
+				cbAction = OBTreeCallbackActionXidWait;
 				Assert(COMMITSEQNO_IS_INPROGRESS(csn));
 
 				if (context->callbackInfo->waitCallback)
@@ -546,19 +617,6 @@ o_btree_modify_handle_conflicts(BTreeModifyInternalContext *context)
 				unlock_page(blkno);
 
 				Assert(cbAction <= OBTreeCallbackActionXidExit);
-
-				loop_tuphdr = context->conflictTupHdr;
-				while ((!XACT_INFO_IS_FINISHED(loop_tuphdr.xactInfo) ||
-						loop_tuphdr.chainHasLocks) &&
-						UndoLocationIsValid(loop_tuphdr.undoLocation) &&
-						UNDO_REC_EXISTS(loop_tuphdr.undoLocation))
-				{
-					was_deleted = was_deleted || loop_tuphdr.deleted;
-					get_prev_leaf_header_from_undo(&loop_tuphdr, false);
-				}
-
-				saved_csn = XACT_INFO_MAP_CSN(loop_tuphdr.xactInfo);
-
 				if (cbAction == OBTreeCallbackActionXidWait)
 					wait_for_tuple(desc, curTuple, oxid,
 								   context->lockMode,
@@ -571,30 +629,78 @@ o_btree_modify_handle_conflicts(BTreeModifyInternalContext *context)
 					Assert(cbAction == OBTreeCallbackActionXidNoWait);
 				}
 
-				BTREE_PAGE_READ_LEAF_ITEM(loop_tuphdr_ptr, loop_tuple, page,
-										  loc);
+				BTREE_PAGE_READ_LEAF_ITEM(loop_tuphdr_ptr, tuple, page, loc);
 				loop_tuphdr = *loop_tuphdr_ptr;
-				while ((!XACT_INFO_IS_FINISHED(loop_tuphdr.xactInfo) ||
-						loop_tuphdr.chainHasLocks) &&
-						UndoLocationIsValid(loop_tuphdr.undoLocation) &&
-						UNDO_REC_EXISTS(loop_tuphdr.undoLocation))
+				cur_deleted = loop_tuphdr.deleted;
+				elog(WARNING, "cur_deleted: %c", cur_deleted ? 'Y' : 'N');
+				elog(WARNING, "context->action: %d", context->action);
+				if (!cur_deleted)
 				{
-					get_prev_leaf_header_from_undo(&loop_tuphdr, false);
+					bool	reinserted = false;
+					while (UndoLocationIsValid(loop_tuphdr.undoLocation) &&
+						UNDO_REC_EXISTS(loop_tuphdr.undoLocation))
+					{
+						if (allocated && !O_TUPLE_IS_NULL(tuple))
+							pfree(tuple.data);
+						elog(WARNING, "loop_tuphdr csn: %lu", XACT_INFO_MAP_CSN(loop_tuphdr.xactInfo));
+						elog(WARNING, "was_deleted: %c", was_deleted ? 'Y' : 'N');
+						elog(WARNING, "loop_tuphdr.deleted: %c", loop_tuphdr.deleted ? 'Y' : 'N');
+						was_deleted = was_deleted || loop_tuphdr.deleted;
+						elog(WARNING, "was_reinserted: %c", was_reinserted ? 'Y' : 'N');
+						elog(WARNING, "reinserted: %c", reinserted ? 'Y' : 'N');
+						was_reinserted = was_reinserted || reinserted;
+						if (!XACT_INFO_IS_LOCK_ONLY(loop_tuphdr.xactInfo))
+						{
+							O_TUPLE_SET_NULL(tuple);
+							get_prev_leaf_header_and_tuple_from_undo_reinserted(&loop_tuphdr, &tuple, 0, &reinserted);
+						}
+						else
+						{
+							get_prev_leaf_header_from_undo(&loop_tuphdr, false);
+							O_TUPLE_SET_NULL(tuple);
+						}
+						if (!O_TUPLE_IS_NULL(tuple))
+							allocated = true;
+						if (saved_descr)
+						{
+							if (!O_TUPLE_IS_NULL(tuple))
+								log_o_tuple(WARNING, "AFTER WAIT REINSERTED TUPLE",
+											saved_descr->nonLeafTupdesc,
+											&saved_descr->nonLeafSpec, tuple);
+						}
+						elog(WARNING, "AFTER WAIT REINSERTED: %c", reinserted ? 'Y' : 'N');
+					}
+					was_reinserted = was_reinserted || reinserted;
 				}
 
-				if (was_deleted &&
-					((saved_csn ==
-						XACT_INFO_MAP_CSN(loop_tuphdr.xactInfo)) ||
-						loop_tuphdr.deleted))
-					was_deleted = false;
+				elog(WARNING, "was_deleted BEFORE: %c", was_deleted ? 'Y' : 'N');
+				elog(WARNING, "was_reinserted BEFORE: %c", was_reinserted ? 'Y' : 'N');
 
-				refind_page(pageFindContext,
-							context->key,
-							context->keyType,
-							0,
-							pageFindContext->items[pageFindContext->index].blkno,
-							pageFindContext->items[pageFindContext->index].pageChangeCount);
-				return was_deleted ? ConflictResolutionInvisible : ConflictResolutionRetry;
+				if (was_reinserted)
+				{
+					// context->tuple = tuple;
+					// context->key = (Pointer) &context->tuple;
+					// context->keyType = BTreeKeyLeafTuple;
+					(void) find_page(pageFindContext, &tuple, BTreeKeyLeafTuple, 0);
+				}
+				else
+				{
+					refind_page(pageFindContext,
+								context->key,
+								context->keyType,
+								0,
+								pageFindContext->items[pageFindContext->index].blkno,
+								pageFindContext->items[pageFindContext->index].pageChangeCount);
+					if (allocated && !O_TUPLE_IS_NULL(tuple))
+						pfree(tuple.data);
+				}
+
+				if (was_reinserted)
+					return ConflictResolutionReinserted;
+				else if (was_deleted)
+					return ConflictResolutionInvisible;
+				else
+					return ConflictResolutionRetry;
 			}
 
 			/* Update tuple and header pointer after page_item_rollback() */
@@ -615,6 +721,39 @@ o_btree_modify_handle_conflicts(BTreeModifyInternalContext *context)
 			ereport(ERROR,
 					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 					 errmsg("could not serialize access due to concurrent update")));
+		}
+	}
+
+	if (conflict_reinserted && context->action == BTreeOperationUpdate)
+	{
+		OTuple tuple;
+		bool reinserted;
+		elog(WARNING, "conflict_reinserted NO CONFLICT 2: %c", conflict_reinserted ? 'Y' : 'N');
+		if (!XACT_INFO_IS_LOCK_ONLY(context->conflictTupHdr.xactInfo))
+		{
+			O_TUPLE_SET_NULL(tuple);
+			get_prev_leaf_header_and_tuple_from_undo_reinserted(&context->conflictTupHdr, &tuple, 0, &reinserted);
+		}
+		else
+		{
+			get_prev_leaf_header_from_undo(&context->conflictTupHdr, false);
+			O_TUPLE_SET_NULL(tuple);
+		}
+		if (!O_TUPLE_IS_NULL(tuple))
+		{
+			// context->tuple = tuple;
+			// context->key = (Pointer) &context->tuple;
+			// context->keyType = BTreeKeyLeafTuple;
+			unlock_page(blkno);
+			(void) find_page(pageFindContext, &tuple, BTreeKeyLeafTuple, 0);
+			if (saved_descr)
+			{
+				if (!O_TUPLE_IS_NULL(tuple))
+					log_o_tuple(WARNING, "NO CONFLICT REINSERTED TUPLE",
+								saved_descr->nonLeafTupdesc,
+								&saved_descr->nonLeafSpec, tuple);
+			}
+			return ConflictResolutionReinserted;
 		}
 	}
 
@@ -824,13 +963,16 @@ o_btree_modify_delete(BTreeModifyInternalContext *context)
 		}
 		else
 		{
-			key = curTuple;
+			key = context->reinsert ? context->tuple : curTuple;
 			key_is_tuple = true;
 		}
 
 		pageChangeCount = O_PAGE_GET_CHANGE_COUNT(page);
 		prev_tuphdr = make_undo_record(desc, key, key_is_tuple,
-									   BTreeOperationDelete, blkno, pageChangeCount,
+									   context->reinsert ?
+										   BTreeOperationDeleteReinsert :
+										   BTreeOperationDelete,
+									   blkno, pageChangeCount,
 									   &undoLocation);
 		prev_tuphdr->xactInfo = tuphdr->xactInfo;
 		prev_tuphdr->undoLocation = tuphdr->undoLocation;
