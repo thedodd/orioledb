@@ -841,6 +841,12 @@ orioledb_utility_command(PlannedStmt *pstmt,
 
 	first_saved_undo_location = true;
 
+#if PG_VERSION_NUM >= 140000
+	/* copied from standard_ProcessUtility */
+	if (readOnlyTree)
+		pstmt = copyObject(pstmt);
+#endif
+
 	if (IsA(pstmt->utilityStmt, AlterTableStmt) &&
 		!is_alter_table_partition(pstmt))
 	{
