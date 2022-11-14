@@ -1759,8 +1759,6 @@ orioledb_object_access_hook(ObjectAccessType access, Oid classId, Oid objectId,
 
 				o_table = o_table_tableam_create(oids, tupdesc);
 				o_opclass_cache_add_table(o_table);
-
-				LWLockAcquire(&checkpoint_state->oTablesAddLock, LW_SHARED);
 				o_tables_add(o_table, oxid, csn);
 			}
 			relation_close(rel, AccessShareLock);
@@ -1996,6 +1994,7 @@ o_define_relation(CreateStmt *cstmt, char relkind, const char *queryString)
 		validate_compress(compress, "Default");
 		validate_compress(primary_compress, "Primary index");
 		validate_compress(toast_compress, "TOAST");
+		LWLockAcquire(&checkpoint_state->oTablesAddLock, LW_SHARED);
 	}
 
 	/* Create the table itself */
