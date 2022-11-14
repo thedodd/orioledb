@@ -403,6 +403,22 @@ SELECT val_int4, val_oid::oid, val_regconfig::regconfig,
 	   val_regdictionary::regdictionary, val_regtype::regtype
 	   FROM o_test_alter_coercible;
 
+CREATE TABLE o_test_inherits_alter_type (
+	aa TEXT
+) USING orioledb;
+
+CREATE TABLE o_test_inherits_alter_type_child (
+	dd TEXT
+) INHERITS (o_test_inherits_alter_type) USING orioledb;
+
+insert into o_test_inherits_alter_type_child values('test','one');
+select * from o_test_inherits_alter_type;
+select * from o_test_inherits_alter_type_child;
+alter table o_test_inherits_alter_type
+	alter column aa type integer using bit_length(aa);
+select * from o_test_inherits_alter_type;
+select * from o_test_inherits_alter_type_child;
+
 DROP TYPE record_type_non_altered CASCADE;
 DROP TYPE record_type_renamed CASCADE;
 DROP TYPE coordinates CASCADE;
