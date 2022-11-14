@@ -98,6 +98,17 @@ SELECT orioledb_table_description('o_ddl_check'::regclass);
 SELECT orioledb_tbl_indices('o_ddl_check'::regclass);
 SELECT * FROM o_ddl_check;
 
+BEGIN;
+ALTER TABLE o_ddl_check ALTER f2 TYPE int
+	USING ('x' || lpad(f2, 8, '0'))::bit(32)::int;
+SELECT orioledb_table_description('o_ddl_check'::regclass);
+SELECT orioledb_tbl_indices('o_ddl_check'::regclass);
+SELECT * FROM o_ddl_check;
+ROLLBACK;
+SELECT orioledb_table_description('o_ddl_check'::regclass);
+SELECT orioledb_tbl_indices('o_ddl_check'::regclass);
+SELECT * FROM o_ddl_check;
+
 ALTER TABLE o_ddl_check ALTER f2 DROP NOT NULL;
 SELECT orioledb_table_description('o_ddl_check'::regclass);
 SELECT orioledb_tbl_indices('o_ddl_check'::regclass);

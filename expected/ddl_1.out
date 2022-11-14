@@ -378,6 +378,68 @@ SELECT * FROM o_ddl_check;
  ABC3 | C  |   
 (3 rows)
 
+BEGIN;
+ALTER TABLE o_ddl_check ALTER f2 TYPE int
+	USING ('x' || lpad(f2, 8, '0'))::bit(32)::int;
+SELECT orioledb_table_description('o_ddl_check'::regclass);
+                orioledb_table_description                 
+-----------------------------------------------------------
+ Compress = -1, Primary compress = -1, TOAST compress = -1+
+  Column |    Type | Collation | Nullable | Droped        +
+      f1 |    text |     POSIX |    false |  false        +
+      f2 | integer |    (null) |    false |  false        +
+      f3 | integer |    (null) |     true |  false        +
+ 
+(1 row)
+
+SELECT orioledb_tbl_indices('o_ddl_check'::regclass);
+              orioledb_tbl_indices              
+------------------------------------------------
+ Index o_ddl_check_pkey                        +
+     Index type: primary, unique               +
+     Leaf tuple size: 3, non-leaf tuple size: 1+
+     Non-leaf tuple fields: f1                 +
+ 
+(1 row)
+
+SELECT * FROM o_ddl_check;
+  f1  | f2 | f3 
+------+----+----
+ ABC1 | 10 |   
+ ABC2 | 11 |   
+ ABC3 | 12 |   
+(3 rows)
+
+ROLLBACK;
+SELECT orioledb_table_description('o_ddl_check'::regclass);
+                orioledb_table_description                 
+-----------------------------------------------------------
+ Compress = -1, Primary compress = -1, TOAST compress = -1+
+  Column |         Type | Collation | Nullable | Droped   +
+      f1 |         text |     POSIX |    false |  false   +
+      f2 | character(1) |   default |    false |  false   +
+      f3 |      integer |    (null) |     true |  false   +
+ 
+(1 row)
+
+SELECT orioledb_tbl_indices('o_ddl_check'::regclass);
+              orioledb_tbl_indices              
+------------------------------------------------
+ Index o_ddl_check_pkey                        +
+     Index type: primary, unique               +
+     Leaf tuple size: 3, non-leaf tuple size: 1+
+     Non-leaf tuple fields: f1                 +
+ 
+(1 row)
+
+SELECT * FROM o_ddl_check;
+  f1  | f2 | f3 
+------+----+----
+ ABC1 | A  |   
+ ABC2 | B  |   
+ ABC3 | C  |   
+(3 rows)
+
 ALTER TABLE o_ddl_check ALTER f2 DROP NOT NULL;
 SELECT orioledb_table_description('o_ddl_check'::regclass);
                 orioledb_table_description                 
