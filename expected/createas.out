@@ -12,6 +12,17 @@ SELECT * FROM o_test_create_as;
       100 |       3 |        1 | 200.00
 (2 rows)
 
+BEGIN;
+CREATE TABLE o_test_create_as_abort (order_id, item_id, quantity, price)
+	USING orioledb AS (VALUES (100, 1, 4, 100.00), (100, 3, 1, 200.00));
+SELECT * FROM o_test_create_as_abort;
+ order_id | item_id | quantity | price  
+----------+---------+----------+--------
+      100 |       1 |        4 | 100.00
+      100 |       3 |        1 | 200.00
+(2 rows)
+
+ROLLBACK;
 CREATE TABLE o_test_create_as_less_atts (order_id, item_id)
 	USING orioledb AS (VALUES (100, 1, 4, 100.00), (100, 3, 1, 200.00));
 SELECT * FROM o_test_create_as_less_atts;
@@ -228,7 +239,13 @@ CREATE SEQUENCE o_matview_seq;
 CREATE MATERIALIZED VIEW o_test_matview (order_id, item_id, quantity, price)
 	USING orioledb AS (VALUES (100, 1, 4, nextval('o_matview_seq'::regclass)),
 							  (100, 3, 1, nextval('o_matview_seq'::regclass)));
-WARNING:  created materialized view with orioledb access method will not support refresh
+SELECT * FROM o_test_matview;
+ order_id | item_id | quantity | price 
+----------+---------+----------+-------
+      100 |       1 |        4 |     1
+      100 |       3 |        1 |     2
+(2 rows)
+
 SELECT * FROM o_test_matview;
  order_id | item_id | quantity | price 
 ----------+---------+----------+-------
@@ -237,12 +254,33 @@ SELECT * FROM o_test_matview;
 (2 rows)
 
 REFRESH MATERIALIZED VIEW o_test_matview;
-ERROR:  materialized views with orioledb access method do not support refresh yet
 SELECT * FROM o_test_matview;
  order_id | item_id | quantity | price 
 ----------+---------+----------+-------
-      100 |       1 |        4 |     1
-      100 |       3 |        1 |     2
+      100 |       1 |        4 |     3
+      100 |       3 |        1 |     4
+(2 rows)
+
+SELECT * FROM o_test_matview;
+ order_id | item_id | quantity | price 
+----------+---------+----------+-------
+      100 |       1 |        4 |     3
+      100 |       3 |        1 |     4
+(2 rows)
+
+REFRESH MATERIALIZED VIEW o_test_matview;
+SELECT * FROM o_test_matview;
+ order_id | item_id | quantity | price 
+----------+---------+----------+-------
+      100 |       1 |        4 |     5
+      100 |       3 |        1 |     6
+(2 rows)
+
+SELECT * FROM o_test_matview;
+ order_id | item_id | quantity | price 
+----------+---------+----------+-------
+      100 |       1 |        4 |     5
+      100 |       3 |        1 |     6
 (2 rows)
 
 DROP FUNCTION query_to_text;

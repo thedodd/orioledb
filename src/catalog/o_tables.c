@@ -725,7 +725,10 @@ o_table_make_index_oids(OTable *table, int *num)
 	for (i = 0; i < oids_num; i++)
 		oids[i] = table->indices[i].oids;
 
-	oids[oids_num++] = table->toast_oids;
+	if (ORelOidsIsValid(table->toast_oids))
+	{
+		oids[oids_num++] = table->toast_oids;
+	}
 
 	/* ctid primary index if needed */
 	if (table->nindices == 0 ||
@@ -1016,6 +1019,35 @@ o_tables_update(OTable *table, OXid oxid, CommitSeqNo csn)
 	return result;
 }
 
+bool
+o_tables_update_without_oids_indexes(OTable *table, OXid oxid, CommitSeqNo csn)
+{
+	OTableChunkKey key;
+	OTable	   *old_table;
+	bool		result;
+	Pointer		data;
+	int			len;
+
+	data = serialize_o_table(table, &len);
+
+	key.oids = table->oids;
+	key.offset = 0;
+	key.version = table->version + 1;
+
+	systrees_modify_start();
+	old_table = o_tables_get(table->oids);
+	// o_tables_oids_indexes(old_table, table, oxid, csn);
+	result = generic_toast_update(&oTablesToastAPI, (Pointer) &key, data, len,
+								  oxid, csn, get_sys_tree(SYS_TREES_O_TABLES));
+	systrees_modify_end();
+
+	pfree(data);
+	o_table_free(old_table);
+
+	add_invalidate_wal_record(table->oids, table->oids.relnode);
+	return result;
+}
+
 void
 o_tables_after_update(OTable *o_table, OXid oxid, CommitSeqNo csn)
 {
@@ -1024,10 +1056,16 @@ o_tables_after_update(OTable *o_table, OXid oxid, CommitSeqNo csn)
 	if (o_table->has_primary)
 	{
 		o_add_invalidate_undo_item(o_table->indices[PrimaryIndexNumber].oids,
-								O_INVALIDATE_OIDS_ON_ABORT);
+								   O_INVALIDATE_OIDS_ON_ABORT);
 		o_invalidate_oids(o_table->indices[PrimaryIndexNumber].oids);
 	}
 	o_invalidate_oids(o_table->oids);
+	if (ORelOidsIsValid(o_table->toast_oids))
+	{
+		o_add_invalidate_undo_item(o_table->toast_oids,
+								   O_INVALIDATE_OIDS_ON_ABORT);
+		o_invalidate_oids(o_table->toast_oids);
+	}
 }
 
 bool
@@ -1598,4 +1636,19 @@ o_table_fill_oids(OTable *oTable, Relation rel, const RelFileNode *newrnode)
 		oTable->indices[i].oids.relnode = indexRel->rd_node.relNode;
 		relation_close(indexRel, AccessShareLock);
 	}
+}
+
+void
+o_tables_swap_relnodes(OTable *old_o_table, OTable *new_o_table)
+{
+	ORelOids	temp_oids = old_o_table->oids;
+
+	old_o_table->oids.datoid = new_o_table->oids.datoid;
+	old_o_table->oids.reloid = new_o_table->oids.reloid;
+	new_o_table->oids.datoid = temp_oids.datoid;
+	new_o_table->oids.reloid = temp_oids.reloid;
+
+	new_o_table->default_compress = old_o_table->default_compress;
+	new_o_table->primary_compress = old_o_table->primary_compress;
+	new_o_table->toast_compress = old_o_table->toast_compress;
 }

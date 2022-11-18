@@ -7,6 +7,12 @@ CREATE TABLE o_test_create_as (order_id, item_id, quantity, price)
 	USING orioledb AS (VALUES (100, 1, 4, 100.00), (100, 3, 1, 200.00));
 SELECT * FROM o_test_create_as;
 
+BEGIN;
+CREATE TABLE o_test_create_as_abort (order_id, item_id, quantity, price)
+	USING orioledb AS (VALUES (100, 1, 4, 100.00), (100, 3, 1, 200.00));
+SELECT * FROM o_test_create_as_abort;
+ROLLBACK;
+
 CREATE TABLE o_test_create_as_less_atts (order_id, item_id)
 	USING orioledb AS (VALUES (100, 1, 4, 100.00), (100, 3, 1, 200.00));
 SELECT * FROM o_test_create_as_less_atts;
@@ -120,7 +126,12 @@ CREATE MATERIALIZED VIEW o_test_matview (order_id, item_id, quantity, price)
 	USING orioledb AS (VALUES (100, 1, 4, nextval('o_matview_seq'::regclass)),
 							  (100, 3, 1, nextval('o_matview_seq'::regclass)));
 SELECT * FROM o_test_matview;
+SELECT * FROM o_test_matview;
 REFRESH MATERIALIZED VIEW o_test_matview;
+SELECT * FROM o_test_matview;
+SELECT * FROM o_test_matview;
+REFRESH MATERIALIZED VIEW o_test_matview;
+SELECT * FROM o_test_matview;
 SELECT * FROM o_test_matview;
 
 DROP FUNCTION query_to_text;

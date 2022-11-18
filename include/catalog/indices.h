@@ -20,17 +20,14 @@
 #include "catalog/o_tables.h"
 
 typedef struct ODefineIndexContext {
-	ORelOids	oids;
-	OIndexType	ix_num;
-	OTable	   *o_table;
-	OTable	   *old_o_table;
-	bool		is_build;
+	Oid			oldNode;
 	bool		reuse;
+	OCompress	compress;
 } ODefineIndexContext;
 
 extern void o_define_index_validate(Relation rel, IndexStmt *stmt,
 									ODefineIndexContext **arg);
-extern void o_define_index(Relation rel, ObjectAddress address,
+extern void o_define_index(Relation rel, ObjectAddress address, bool reindex,
 					  	   ODefineIndexContext *context);
 
 extern void o_index_drop(Relation tbl, OIndexNumber ix_num);
@@ -39,8 +36,7 @@ extern OIndexNumber o_find_ix_num_by_name(OTableDescr *descr,
 extern bool is_in_indexes_rebuild(void);
 
 extern void rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
-							OTable *o_table, OTableDescr *descr,
-							List *newvals);
+							OTable *o_table, OTableDescr *descr);
 extern void assign_new_oids(OTable *oTable, Relation rel);
 extern void recreate_o_table(OTable *old_o_table, OTable *o_table);
 extern void build_secondary_index(OTable *o_table, OTableDescr *descr,
