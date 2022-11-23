@@ -713,42 +713,49 @@ orioledb_relation_set_new_filenode(Relation rel,
 		rel->rd_rel->relkind != RELKIND_TOASTVALUE &&
 		!is_in_indexes_rebuild())
 	{
-		OTable	   *o_table;
+		OTable	   *old_o_table,
+				   *new_o_table;
+		TupleDesc	tupdesc;
 		CommitSeqNo csn;
 		OXid		oxid;
 		int			oldTreeOidsNum,
 					newTreeOidsNum;
-		ORelOids	oldOids,
+		ORelOids	old_oids,
 				   *oldTreeOids,
-					newOids,
+					new_oids,
 				   *newTreeOids;
 
-		oldOids.datoid = MyDatabaseId;
-		oldOids.reloid = rel->rd_rel->oid;
-		oldOids.relnode = rel->rd_node.relNode;
+		old_oids.datoid = MyDatabaseId;
+		old_oids.reloid = rel->rd_rel->oid;
+		old_oids.relnode = rel->rd_node.relNode;
+		old_o_table = o_tables_get(old_oids);
+		Assert(old_o_table != NULL);
+		oldTreeOids = o_table_make_index_oids(old_o_table, &oldTreeOidsNum);
 
-		fill_current_oxid_csn(&oxid, &csn);
+		tupdesc = RelationGetDescr(rel);
+		new_oids.datoid = MyDatabaseId;
+		new_oids.reloid = rel->rd_rel->oid;
+		new_oids.relnode = newrnode->relNode;
 
-		o_table = o_tables_get(oldOids);
-		Assert(o_table != NULL);
-		oldTreeOids = o_table_make_index_oids(o_table, &oldTreeOidsNum);
+		new_o_table = o_table_tableam_create(new_oids, tupdesc);
+		o_opclass_cache_add_table(new_o_table);
+		o_table_fill_oids(new_o_table, rel, newrnode);
 
-		o_table_fill_oids(o_table, rel, newrnode);
-
-		newOids = o_table->oids;
-		newTreeOids = o_table_make_index_oids(o_table, &newTreeOidsNum);
+		newTreeOids = o_table_make_index_oids(new_o_table, &newTreeOidsNum);
 
 		LWLockAcquire(&checkpoint_state->oTablesAddLock, LW_SHARED);
-		o_tables_drop_by_oids(oldOids, oxid, csn);
-		o_tables_add(o_table, oxid, csn);
+
+		fill_current_oxid_csn(&oxid, &csn);
+		o_tables_drop_by_oids(old_oids, oxid, csn);
+		o_tables_add(new_o_table, oxid, csn);
 		LWLockRelease(&checkpoint_state->oTablesAddLock);
-		o_table_free(o_table);
+		o_table_free(new_o_table);
 
 		orioledb_free_rd_amcache(rel);
 
-		Assert(o_fetch_table_descr(newOids) != NULL);
-		add_undo_truncate_relnode(oldOids, oldTreeOids, oldTreeOidsNum,
-								  newOids, newTreeOids, newTreeOidsNum);
+		Assert(o_fetch_table_descr(new_oids) != NULL);
+		add_undo_truncate_relnode(old_oids, oldTreeOids, oldTreeOidsNum,
+								  new_oids, newTreeOids, newTreeOidsNum);
 		pfree(oldTreeOids);
 		pfree(newTreeOids);
 	}
@@ -1417,11 +1424,12 @@ orioledb_define_index_validate(Relation rel, IndexStmt *stmt,
 }
 
 static bool
-orioledb_define_index(Relation rel, ObjectAddress address, bool reindex,
-					  void *arg)
+orioledb_define_index(Relation rel, Oid indoid, bool reindex,
+					  bool skip_constraint_checks, void *arg)
 {
 	if (!is_in_indexes_rebuild())
-		o_define_index(rel, address, reindex, (ODefineIndexContext *) arg);
+		o_define_index(rel, indoid, reindex, skip_constraint_checks,
+					   (ODefineIndexContext *) arg);
 	return true;
 }
 

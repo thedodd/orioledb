@@ -1,8 +1,6 @@
 from .base_test import BaseTest
 from testgres.exceptions import QueryException
 from testgres.connection import DatabaseError
-import psycopg2
-import gc
 import re
 
 class TriggerTest(BaseTest):

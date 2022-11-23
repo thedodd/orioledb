@@ -623,70 +623,6 @@ RangeVarCallbackForAlterRelation(const RangeVar *rv, Oid relid, Oid oldrelid,
 	ReleaseSysCache(tuple);
 }
 
-/*
- *		renameatt_check			- basic sanity checks before attribute rename
- */
-static void
-renameatt_check(Oid myrelid, Form_pg_class classform, bool recursing)
-{
-	char		relkind = classform->relkind;
-
-	if (classform->reloftype && !recursing)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("cannot rename column of typed table")));
-
-	/*
-	 * Renaming the columns of sequences or toast tables doesn't actually
-	 * break anything from the system's point of view, since internal
-	 * references are by attnum.  But it doesn't seem right to allow users to
-	 * change names that are hardcoded into the system, hence the following
-	 * restriction.
-	 */
-	if (relkind != RELKIND_RELATION &&
-		relkind != RELKIND_VIEW &&
-		relkind != RELKIND_MATVIEW &&
-		relkind != RELKIND_COMPOSITE_TYPE &&
-		relkind != RELKIND_INDEX &&
-		relkind != RELKIND_PARTITIONED_INDEX &&
-		relkind != RELKIND_FOREIGN_TABLE &&
-		relkind != RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table, view, materialized view, composite type, index, or foreign table",
-						NameStr(classform->relname))));
-
-	/*
-	 * permissions checking.  only the owner of a class can change its schema.
-	 */
-	if (!pg_class_ownercheck(myrelid, GetUserId()))
-		aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(get_rel_relkind(myrelid)),
-					   NameStr(classform->relname));
-	if (!allowSystemTableMods && IsSystemClass(myrelid, classform))
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("permission denied: \"%s\" is a system catalog",
-						NameStr(classform->relname))));
-}
-
-/*
- * Perform permissions and integrity checks before acquiring a relation lock.
- */
-static void
-RangeVarCallbackForRenameAttribute(const RangeVar *rv, Oid relid, Oid oldrelid,
-								   void *arg)
-{
-	HeapTuple	tuple;
-	Form_pg_class form;
-
-	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
-	if (!HeapTupleIsValid(tuple))
-		return;					/* concurrently dropped */
-	form = (Form_pg_class) GETSTRUCT(tuple);
-	renameatt_check(relid, form, false);
-	ReleaseSysCache(tuple);
-}
-
 static void
 orioledb_utility_command(PlannedStmt *pstmt,
 						 const char *queryString,
@@ -937,7 +873,7 @@ orioledb_utility_command(PlannedStmt *pstmt,
 												AccessShareLock);
 
 				if ((tbl->rd_rel->relkind == RELKIND_RELATION ||
-					tbl->rd_rel->relkind == RELKIND_MATVIEW) &&
+					 tbl->rd_rel->relkind == RELKIND_MATVIEW) &&
 					is_orioledb_rel(tbl))
 				{
 					OTable	   *o_table;
@@ -988,83 +924,6 @@ orioledb_utility_command(PlannedStmt *pstmt,
 				relation_close(tbl, AccessShareLock);
 			}
 			relation_close(idx, AccessExclusiveLock);
-		}
-		else if (stmt->renameType == OBJECT_COLUMN)
-		{
-			Relation	tbl;
-			Oid			relid;
-
-			/* lock level taken here should match renameatt_internal */
-			relid = RangeVarGetRelidExtended(stmt->relation, AccessExclusiveLock,
-											 stmt->missing_ok ? RVR_MISSING_OK : 0,
-											 RangeVarCallbackForRenameAttribute,
-											 NULL);
-
-			if (!OidIsValid(relid))
-			{
-				ereport(NOTICE,
-						(errmsg("relation \"%s\" does not exist, skipping",
-								stmt->relation->relname)));
-				return;
-			}
-
-			tbl = relation_openrv(stmt->relation, AccessExclusiveLock);
-
-			if ((tbl->rd_rel->relkind == RELKIND_RELATION ||
-				 tbl->rd_rel->relkind == RELKIND_MATVIEW) &&
-				is_orioledb_rel(tbl))
-			{
-				OTable	   *o_table;
-				ORelOids	table_oids = {MyDatabaseId, tbl->rd_rel->oid, tbl->rd_node.relNode};
-
-				o_table = o_tables_get(table_oids);
-				if (o_table == NULL)
-				{
-					elog(NOTICE, "orioledb table %s not found",
-						 RelationGetRelationName(tbl));
-				}
-				else
-				{
-					CommitSeqNo csn;
-					OXid		oxid;
-					OTableField *field;
-					int			ix_num,
-								renamed_num;
-
-					renamed_num = o_table_fieldnum(o_table, stmt->subname);
-					if (renamed_num < o_table->nfields)
-					{
-						field = &o_table->fields[renamed_num];
-						namestrcpy(&field->name, stmt->newname);
-						fill_current_oxid_csn(&oxid, &csn);
-						o_tables_update(o_table, oxid, csn);
-
-						for (ix_num = 0; ix_num < o_table->nindices; ix_num++)
-						{
-							OTableIndex *index = &o_table->indices[ix_num];
-							int			field_num;
-
-							for (field_num = 0; field_num < index->nfields;
-								 field_num++)
-							{
-								if ((index->type == oIndexPrimary) ||
-									(index->fields[field_num].attnum ==
-									 renamed_num))
-								{
-									o_indices_update(o_table, ix_num,
-													 oxid, csn);
-									o_invalidate_oids(index->oids);
-									break;
-								}
-							}
-						}
-						o_invalidate_oids(table_oids);
-						AcceptInvalidationMessages();
-					}
-					o_table_free(o_table);
-				}
-			}
-			relation_close(tbl, AccessExclusiveLock);
 		}
 	}
 
@@ -1277,7 +1136,8 @@ orioledb_object_access_hook(ObjectAccessType access, Oid classId, Oid objectId,
 				pfree(treeOids);
 				o_table_free(table);
 			}
-			else if ((rel->rd_rel->relkind == RELKIND_RELATION) &&
+			else if ((rel->rd_rel->relkind == RELKIND_RELATION ||
+					  rel->rd_rel->relkind == RELKIND_MATVIEW) &&
 					 (subId != 0) && is_orioledb_rel(rel))
 			{
 				OTable	   *o_table;
@@ -1420,7 +1280,8 @@ orioledb_object_access_hook(ObjectAccessType access, Oid classId, Oid objectId,
 				o_class_cache_update_if_needed(MyDatabaseId, rel->rd_rel->oid,
 											   NULL);
 			}
-			else if ((rel->rd_rel->relkind == RELKIND_RELATION) &&
+			else if ((rel->rd_rel->relkind == RELKIND_RELATION ||
+					  rel->rd_rel->relkind == RELKIND_MATVIEW) &&
 					 (subId != 0) && is_orioledb_rel(rel))
 			{
 				OTableField			   *field;
@@ -1641,7 +1502,8 @@ orioledb_object_access_hook(ObjectAccessType access, Oid classId, Oid objectId,
 				o_class_cache_update_if_needed(MyDatabaseId, rel->rd_rel->oid,
 											   NULL);
 			}
-			else if (rel->rd_rel->relkind == RELKIND_RELATION &&
+			else if ((rel->rd_rel->relkind == RELKIND_RELATION ||
+					  rel->rd_rel->relkind == RELKIND_MATVIEW) &&
 					 (subId != 0) && is_orioledb_rel(rel))
 			{
 				OTable *o_table;
@@ -1664,6 +1526,7 @@ orioledb_object_access_hook(ObjectAccessType access, Oid classId, Oid objectId,
 					bool				rewrite;
 					CommitSeqNo			csn;
 					OXid				oxid;
+					int					ix_num;
 
 					old_field = o_table->fields[subId - 1];
 					CommandCounterIncrement();
@@ -1685,6 +1548,33 @@ orioledb_object_access_hook(ObjectAccessType access, Oid classId, Oid objectId,
 						fill_current_oxid_csn(&oxid, &csn);
 						o_tables_update(o_table, oxid, csn);
 						o_tables_after_update(o_table, oxid, csn);
+						for (ix_num = 0; ix_num < o_table->nindices; ix_num++)
+						{
+							int				field_num;
+							int				ctid_off;
+							OTableIndex	   *index;
+
+							ctid_off = o_table->has_primary ? 0 : 1;
+							index = &o_table->indices[ix_num];
+
+							for (field_num = 0; field_num < index->nfields;
+								 field_num++)
+							{
+								if ((index->type == oIndexPrimary) ||
+									(index->fields[field_num].attnum ==
+									 subId - 1))
+								{
+									o_indices_update(o_table,
+													 ix_num + ctid_off,
+													 oxid, csn);
+									o_invalidate_oids(index->oids);
+									o_add_invalidate_undo_item(
+										index->oids,
+										O_INVALIDATE_OIDS_ON_ABORT);
+									break;
+								}
+							}
+						}
 					}
 					o_table_free(o_table);
 				}

@@ -21,14 +21,14 @@
 
 typedef struct ODefineIndexContext {
 	Oid			oldNode;
-	bool		reuse;
 	OCompress	compress;
 } ODefineIndexContext;
 
 extern void o_define_index_validate(Relation rel, IndexStmt *stmt,
 									ODefineIndexContext **arg);
-extern void o_define_index(Relation rel, ObjectAddress address, bool reindex,
-					  	   ODefineIndexContext *context);
+extern void o_define_index(Relation rel, Oid indoid, bool reindex,
+						   bool skip_constraint_checks,
+						   ODefineIndexContext *context);
 
 extern void o_index_drop(Relation tbl, OIndexNumber ix_num);
 extern OIndexNumber o_find_ix_num_by_name(OTableDescr *descr,

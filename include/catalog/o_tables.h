@@ -107,7 +107,7 @@ typedef struct
 												   ALLOCSET_DEFAULT_SIZES)))
 
 extern void o_table_fill_index(OTable *o_table, OIndexNumber ix_num,
-							   OIndexType type, Relation index_rel);
+							   Relation index_rel);
 
 /* Creates and fills OTable. */
 extern OTable *o_table_tableam_create(ORelOids oids, TupleDesc tupdesc);

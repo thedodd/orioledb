@@ -214,7 +214,6 @@ o_define_index_validate(Relation rel, IndexStmt *stmt,
 
 	*arg = &context;
 
-	context.reuse = reuse;
 	context.oldNode = stmt->oldNode;
 	context.compress = InvalidOCompress;
 
@@ -353,8 +352,8 @@ o_define_index_validate(Relation rel, IndexStmt *stmt,
 }
 
 void
-o_define_index(Relation rel, ObjectAddress address, bool reindex,
-			   ODefineIndexContext *context)
+o_define_index(Relation rel, Oid indoid, bool reindex,
+			   bool skip_constraint_checks, ODefineIndexContext *context)
 {
 	Relation		index_rel;
 	OTable		   *old_o_table = NULL;
@@ -371,10 +370,10 @@ o_define_index(Relation rel, ObjectAddress address, bool reindex,
 	OCompress		compress = InvalidOCompress;
 	int16			indnkeyatts;
 
-	index_rel = index_open(address.objectId, AccessShareLock);
+	index_rel = index_open(indoid, AccessShareLock);
 	if (context)
 	{
-		reuse = context->reuse;
+		reuse = OidIsValid(context->oldNode);
 		compress = context->compress;
 	}
 
@@ -400,15 +399,6 @@ o_define_index(Relation rel, ObjectAddress address, bool reindex,
 
 	if (!reuse)
 	{
-		/* Rebuild, assign new oids */
-		if (ix_type == oIndexPrimary)
-		{
-			new_o_table = o_tables_get(oids);
-			o_table = new_o_table;
-			assign_new_oids(new_o_table, rel);
-			oids = new_o_table->oids;
-		}
-
 		if (reindex)
 		{
 			int	i;
@@ -416,21 +406,51 @@ o_define_index(Relation rel, ObjectAddress address, bool reindex,
 			ix_num = InvalidIndexNumber;
 			for (i = 0; i < o_table->nindices; i++)
 			{
-				if (o_table->indices[i].oids.reloid == address.objectId)
+				if (o_table->indices[i].oids.reloid == indoid)
 					ix_num = i;
 			}
-			reindex = ix_num != InvalidIndexNumber;
+			reindex = ix_num != InvalidIndexNumber &&
+					  ix_num < o_table->nindices;
+		}
+
+		if (reindex)
+		{
+			o_index_drop(rel, ix_num);
+
+			if (ix_type == oIndexPrimary)
+			{
+				o_table_free(old_o_table);
+				oids.relnode = rel->rd_node.relNode;
+				old_o_table = o_tables_get(oids);
+				if (old_o_table == NULL)
+				{
+					elog(FATAL, "orioledb table does not exists "
+								"for oids = %u, %u, %u",
+						 oids.datoid, oids.reloid, oids.relnode);
+				}
+				o_table = old_o_table;
+				reindex = false;
+			}
 		}
 
 		if (!reindex)
 		{
-			ORelOids		primary_oids;
+			ORelOids	primary_oids;
 
 			primary_oids = ix_type == oIndexPrimary ||
-							!old_o_table->has_primary ?
-								old_o_table->oids :
-								old_o_table->indices[PrimaryIndexNumber].oids;
+						   !old_o_table->has_primary ?
+							   old_o_table->oids :
+							   old_o_table->indices[PrimaryIndexNumber].oids;
 			is_build = tbl_data_exists(&primary_oids);
+
+			/* Rebuild, assign new oids */
+			if (ix_type == oIndexPrimary)
+			{
+				new_o_table = o_tables_get(oids);
+				o_table = new_o_table;
+				assign_new_oids(new_o_table, rel);
+				oids = new_o_table->oids;
+			}
 
 			if (ix_type == oIndexPrimary)
 			{
@@ -466,6 +486,10 @@ o_define_index(Relation rel, ObjectAddress address, bool reindex,
 			else
 				o_table->indices[ix_num].compress = o_table->default_compress;
 		}
+		else
+		{
+			is_build = true;
+		}
 	}
 	else
 	{
@@ -480,7 +504,7 @@ o_define_index(Relation rel, ObjectAddress address, bool reindex,
 		Assert(ix_num != InvalidIndexNumber);
 	}
 
-	index_rel = index_open(address.objectId, AccessShareLock);
+	index_rel = index_open(indoid, AccessShareLock);
 	index = &o_table->indices[ix_num];
 	if (!reuse)
 		memcpy(&index->name, &index_rel->rd_rel->relname,
@@ -489,12 +513,15 @@ o_define_index(Relation rel, ObjectAddress address, bool reindex,
 
 	/* fill index fields */
 	if (!reuse)
-		o_table_fill_index(o_table, ix_num, index->type, index_rel);
+	{
+		index->type = ix_type;
+		o_table_fill_index(o_table, ix_num, index_rel);
+	}
 
 	index_close(index_rel, AccessShareLock);
 
 	index->oids.datoid = MyDatabaseId;
-	index->oids.reloid = address.objectId;
+	index->oids.reloid = indoid;
 
 	if (!reuse)
 	{
@@ -546,6 +573,12 @@ o_define_index(Relation rel, ObjectAddress address, bool reindex,
 		recreate_table_descr_by_oids(oids);
 	}
 
+	if (reindex)
+	{
+		o_invalidate_oids(index->oids);
+		o_add_invalidate_undo_item(index->oids, O_INVALIDATE_OIDS_ON_ABORT);
+	}
+
 	if (old_o_table)
 		o_table_free(old_o_table);
 	if (o_table != old_o_table)
@@ -588,6 +621,7 @@ build_secondary_index(OTable *o_table, OTableDescr *descr, OIndexNumber ix_num)
 	primarySlot = MakeSingleTupleTableSlot(descr->tupdesc, &TTSOpsOrioleDB);
 
 	heap_tuples = 0;
+	index_tuples = 0;
 	ctid = 1;
 	while (true)
 	{
@@ -609,16 +643,23 @@ build_secondary_index(OTable *o_table, OTableDescr *descr, OIndexNumber ix_num)
 
 		heap_tuples++;
 
-		oldContext = MemoryContextSwitchTo(sortstate->tuplecontext);
-		secondaryTup = tts_orioledb_make_secondary_tuple(primarySlot, idx, true);
-		MemoryContextSwitchTo(oldContext);
+		if (o_is_index_predicate_satisfied(idx, primarySlot, idx->econtext))
+		{
+			oldContext = MemoryContextSwitchTo(sortstate->tuplecontext);
+			secondaryTup = tts_orioledb_make_secondary_tuple(primarySlot,
+															 idx, true);
+			MemoryContextSwitchTo(oldContext);
 
-		o_btree_check_size_of_tuple(o_tuple_size(secondaryTup, &idx->leafSpec), idx->name.data, true);
-		tuplesort_putotuple(sortstate, secondaryTup);
+			index_tuples++;
+
+			o_btree_check_size_of_tuple(o_tuple_size(secondaryTup,
+													 &idx->leafSpec),
+										idx->name.data, true);
+			tuplesort_putotuple(sortstate, secondaryTup);
+		}
 
 		ExecClearTuple(primarySlot);
 	}
-	index_tuples = heap_tuples;
 	ExecDropSingleTupleTableSlot(primarySlot);
 	pfree(iter);
 
@@ -669,7 +710,7 @@ rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 	int						i;
 	Relation				tableRelation;
 	double					heap_tuples,
-							index_tuples;
+						   *index_tuples;
 	uint64					ctid;
 	CheckpointFileHeader   *fileHeaders;
 	CheckpointFileHeader	toastFileHeader;
@@ -698,6 +739,7 @@ rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 								   COMMITSEQNO_INPROGRESS, ForwardScanDirection);
 	heap_tuples = 0;
 	ctid = 0;
+	index_tuples = palloc0(sizeof(double) * descr->nIndices);
 	while (true)
 	{
 		OTuple		primaryTup;
@@ -727,6 +769,8 @@ rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 												idx->econtext))
 				continue;
 
+			index_tuples[i]++;
+
 			oldContext = MemoryContextSwitchTo(sortstates[i]->tuplecontext);
 			if (i == 0)
 			{
@@ -755,7 +799,6 @@ rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 		ExecClearTuple(primarySlot);
 		heap_tuples++;
 	}
-	index_tuples = heap_tuples;
 
 	ExecDropSingleTupleTableSlot(primarySlot);
 	btree_iterator_free(iter);
@@ -978,7 +1021,7 @@ rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 				table_close(pg_index, RowExclusiveLock);
 			}
 
-			index_update_stats(indexRelation, false, index_tuples);
+			index_update_stats(indexRelation, false, index_tuples[i]);
 			index_close(indexRelation, AccessExclusiveLock);
 		}
 
@@ -986,6 +1029,7 @@ rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 		CommandCounterIncrement();
 		table_close(tableRelation, AccessExclusiveLock);
 	}
+	pfree(index_tuples);
 }
 
 static void
