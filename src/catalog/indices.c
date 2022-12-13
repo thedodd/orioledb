@@ -17,6 +17,7 @@
 #include "btree/build.h"
 #include "btree/io.h"
 #include "btree/undo.h"
+#include "btree/scan.h"
 #include "checkpoint/checkpoint.h"
 #include "catalog/indices.h"
 #include "catalog/o_sys_cache.h"
@@ -472,7 +473,7 @@ o_define_index(Relation rel, ObjectAddress address,
 void
 build_secondary_index(OTable *o_table, OTableDescr *descr, OIndexNumber ix_num)
 {
-	BTreeIterator *iter;
+	void		*sscan;
 	OIndexDescr *primary,
 			   *idx;
 	Tuplesortstate *sortstate;
@@ -485,9 +486,7 @@ build_secondary_index(OTable *o_table, OTableDescr *descr, OIndexNumber ix_num)
 	CheckpointFileHeader fileHeader;
 
 	idx = descr->indices[o_table->has_primary ? ix_num : ix_num + 1];
-
 	primary = GET_PRIMARY(descr);
-
 	o_btree_load_shmem(&primary->desc);
 
 	if (!is_recovery_in_progress())
@@ -496,9 +495,7 @@ build_secondary_index(OTable *o_table, OTableDescr *descr, OIndexNumber ix_num)
 	if (indexRelation)
 		index_close(indexRelation, AccessShareLock);
 
-	iter = o_btree_iterator_create(&primary->desc, NULL, BTreeKeyNone,
-								   COMMITSEQNO_INPROGRESS, ForwardScanDirection);
-
+	sscan = make_btree_seq_scan(&primary->desc, COMMITSEQNO_INPROGRESS, NULL);
 	primarySlot = MakeSingleTupleTableSlot(descr->tupdesc, &TTSOpsOrioleDB);
 
 	heap_tuples = 0;
@@ -508,17 +505,17 @@ build_secondary_index(OTable *o_table, OTableDescr *descr, OIndexNumber ix_num)
 		OTuple		primaryTup;
 		OTuple		secondaryTup;
 		MemoryContext oldContext;
+		CommitSeqNo tupleCsn;
+		BTreeLocationHint hint;
 
-		primaryTup = o_btree_iterator_fetch(iter, NULL, NULL,
-											BTreeKeyNone, true, NULL);
+		primaryTup = btree_seq_scan_getnext(sscan, primarySlot->tts_mcxt, &tupleCsn, &hint);
 
 		if (O_TUPLE_IS_NULL(primaryTup))
 			break;
 
 		tts_orioledb_store_tuple(primarySlot, primaryTup, descr,
 								 COMMITSEQNO_INPROGRESS, PrimaryIndexNumber,
-								 true, NULL);
-
+								 true, &hint);
 		slot_getallattrs(primarySlot);
 
 		heap_tuples++;
@@ -534,7 +531,7 @@ build_secondary_index(OTable *o_table, OTableDescr *descr, OIndexNumber ix_num)
 	}
 	index_tuples = heap_tuples;
 	ExecDropSingleTupleTableSlot(primarySlot);
-	pfree(iter);
+	free_btree_seq_scan(sscan);
 
 	tuplesort_performsort(sortstate);
 
@@ -574,7 +571,7 @@ void
 rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 				OTable *o_table, OTableDescr *descr)
 {
-	BTreeIterator *iter;
+	void 		*sscan;
 	OIndexDescr *primary,
 			   *idx;
 	Tuplesortstate **sortstates;
@@ -608,23 +605,24 @@ rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 													descr->indices[0],
 													work_mem, false, NULL);
 
-	iter = o_btree_iterator_create(&primary->desc, NULL, BTreeKeyNone,
-								   COMMITSEQNO_INPROGRESS, ForwardScanDirection);
+	sscan = make_btree_seq_scan(&primary->desc, COMMITSEQNO_INPROGRESS, NULL);
+
 	heap_tuples = 0;
 	ctid = 0;
 	while (true)
 	{
 		OTuple		primaryTup;
+		CommitSeqNo tupleCsn;
+		BTreeLocationHint hint;
 
-		primaryTup = o_btree_iterator_fetch(iter, NULL, NULL,
-											BTreeKeyNone, true, NULL);
+		primaryTup = btree_seq_scan_getnext(sscan, primarySlot->tts_mcxt, &tupleCsn , &hint);
 
 		if (O_TUPLE_IS_NULL(primaryTup))
 			break;
 
 		tts_orioledb_store_tuple(primarySlot, primaryTup, old_descr,
 								 COMMITSEQNO_INPROGRESS, PrimaryIndexNumber,
-								 true, NULL);
+								 true, &hint);
 
 		slot_getallattrs(primarySlot);
 		tts_orioledb_detoast(primarySlot);
@@ -670,7 +668,7 @@ rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 	index_tuples = heap_tuples;
 
 	ExecDropSingleTupleTableSlot(primarySlot);
-	btree_iterator_free(iter);
+	free_btree_seq_scan(sscan);
 
 	for (i = 0; i < descr->nIndices; i++)
 	{

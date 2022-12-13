@@ -52,7 +52,6 @@
 #include "tuple/slot.h"
 #include "utils/sampling.h"
 #include "utils/stopevent.h"
-#include "tableam/handler.h"
 
 #include "miscadmin.h"
 #if PG_VERSION_NUM >= 140000
