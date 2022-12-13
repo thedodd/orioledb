@@ -474,22 +474,21 @@ void
 build_secondary_index(OTable *o_table, OTableDescr *descr, OIndexNumber ix_num)
 {
 	OIndexDescr *primary,
-			   *idx;
+				*idx;
 	Tuplesortstate *sortstate;
 	TupleTableSlot *primarySlot;
-	Relation	tableRelation,
+	Relation	tableRelation = NULL,
 				indexRelation = NULL;
 	double		heap_tuples,
 				index_tuples;
 	uint64		ctid;
 	CheckpointFileHeader fileHeader;
-	Snapshot 	snapshot;
+	SnapshotData snapshot;
 	TableScanDesc sscan;
 
+	InitDirtySnapshot(snapshot);
 	idx = descr->indices[o_table->has_primary ? ix_num : ix_num + 1];
-
 	primary = GET_PRIMARY(descr);
-
 	o_btree_load_shmem(&primary->desc);
 
 	if (!is_recovery_in_progress())
@@ -507,15 +506,14 @@ build_secondary_index(OTable *o_table, OTableDescr *descr, OIndexNumber ix_num)
 	heap_tuples = 0;
 	ctid = 1;
 
-	snapshot->snapshotcsn = COMMITSEQNO_INPROGRESS;
-	sscan = orioledb_beginscan(tableRelation, snapshot, 0, NULL, NULL, 0);
+	snapshot.snapshotcsn = COMMITSEQNO_INPROGRESS;
+	sscan = orioledb_beginscan(tableRelation, &snapshot, 0, NULL, NULL, 0);
 
 	if (tableRelation)
 		table_close(tableRelation, AccessShareLock);
 
 	while (orioledb_getnextslot(sscan, ForwardScanDirection, primarySlot))
 	{
-		OTuple		primaryTup;
 		OTuple		secondaryTup;
 		MemoryContext oldContext;
 

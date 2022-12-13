@@ -1231,7 +1231,7 @@ orioledb_endscan(TableScanDesc sscan)
 
 	STOPEVENT(STOPEVENT_SCAN_END, NULL);
 
-	if (scan->rs_base.rs_flags & SO_TEMP_SNAPSHOT)
+	if ((scan->rs_base.rs_flags & SO_TEMP_SNAPSHOT) && (scan->rs_base.rs_snapshot->snapshot_type != SNAPSHOT_DIRTY))
 		UnregisterSnapshot(scan->rs_base.rs_snapshot);
 
 	if (scan->scan)
