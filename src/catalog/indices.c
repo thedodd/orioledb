@@ -470,6 +470,27 @@ o_define_index(Relation rel, ObjectAddress address,
 		LWLockRelease(&checkpoint_state->oTablesAddLock);
 }
 
+static inline
+bool scan_getnextslot_allattrs(BTreeSeqScan *scan, OTableDescr *descr,
+							   TupleTableSlot *slot, double *ntuples)
+{
+	OTuple		tup;
+	CommitSeqNo tupleCsn;
+	BTreeLocationHint hint;
+
+	tup = btree_seq_scan_getnext(scan, slot->tts_mcxt, &tupleCsn, &hint);
+
+	if (O_TUPLE_IS_NULL(tup))
+		return false;
+
+	tts_orioledb_store_tuple(slot, tup, descr,
+							 COMMITSEQNO_INPROGRESS, PrimaryIndexNumber,
+							 true, &hint);
+	slot_getallattrs(slot);
+	(*ntuples)++;
+	return true;
+}
+
 void
 build_secondary_index(OTable *o_table, OTableDescr *descr, OIndexNumber ix_num)
 {
@@ -480,45 +501,23 @@ build_secondary_index(OTable *o_table, OTableDescr *descr, OIndexNumber ix_num)
 	TupleTableSlot *primarySlot;
 	Relation	tableRelation,
 				indexRelation = NULL;
-	double		heap_tuples,
-				index_tuples;
+	double		ntuples;
 	uint64		ctid;
 	CheckpointFileHeader fileHeader;
 
 	idx = descr->indices[o_table->has_primary ? ix_num : ix_num + 1];
 	primary = GET_PRIMARY(descr);
 	o_btree_load_shmem(&primary->desc);
-
-	if (!is_recovery_in_progress())
-		indexRelation = index_open(idx->oids.reloid, AccessShareLock);
 	sortstate = tuplesort_begin_orioledb_index(idx, work_mem, false, NULL);
-	if (indexRelation)
-		index_close(indexRelation, AccessShareLock);
-
 	sscan = make_btree_seq_scan(&primary->desc, COMMITSEQNO_INPROGRESS, NULL);
 	primarySlot = MakeSingleTupleTableSlot(descr->tupdesc, &TTSOpsOrioleDB);
 
-	heap_tuples = 0;
+	ntuples = 0;
 	ctid = 1;
-	while (true)
+	while (scan_getnextslot_allattrs(sscan, descr, primarySlot, &ntuples))
 	{
-		OTuple		primaryTup;
 		OTuple		secondaryTup;
 		MemoryContext oldContext;
-		CommitSeqNo tupleCsn;
-		BTreeLocationHint hint;
-
-		primaryTup = btree_seq_scan_getnext(sscan, primarySlot->tts_mcxt, &tupleCsn, &hint);
-
-		if (O_TUPLE_IS_NULL(primaryTup))
-			break;
-
-		tts_orioledb_store_tuple(primarySlot, primaryTup, descr,
-								 COMMITSEQNO_INPROGRESS, PrimaryIndexNumber,
-								 true, &hint);
-		slot_getallattrs(primarySlot);
-
-		heap_tuples++;
 
 		oldContext = MemoryContextSwitchTo(sortstate->tuplecontext);
 		secondaryTup = tts_orioledb_make_secondary_tuple(primarySlot, idx, true);
@@ -529,7 +528,6 @@ build_secondary_index(OTable *o_table, OTableDescr *descr, OIndexNumber ix_num)
 
 		ExecClearTuple(primarySlot);
 	}
-	index_tuples = heap_tuples;
 	ExecDropSingleTupleTableSlot(primarySlot);
 	free_btree_seq_scan(sscan);
 
@@ -554,11 +552,11 @@ build_secondary_index(OTable *o_table, OTableDescr *descr, OIndexNumber ix_num)
 								   AccessExclusiveLock);
 		index_update_stats(tableRelation,
 						   true,
-						   heap_tuples);
+						   ntuples);
 
 		index_update_stats(indexRelation,
 						   false,
-						   index_tuples);
+						   ntuples);
 
 		/* Make the updated catalog row versions visible */
 		CommandCounterIncrement();
@@ -579,15 +577,13 @@ rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 	TupleTableSlot *primarySlot;
 	int			i;
 	Relation	tableRelation;
-	double		heap_tuples,
-				index_tuples;
+	double		ntuples;
 	uint64		ctid;
 	CheckpointFileHeader *fileHeaders;
 	CheckpointFileHeader toastFileHeader;
 
 	primary = GET_PRIMARY(old_descr);
 	o_btree_load_shmem(&primary->desc);
-
 	sortstates = (Tuplesortstate **) palloc(sizeof(Tuplesortstate *) *
 											descr->nIndices);
 	fileHeaders = (CheckpointFileHeader *) palloc(sizeof(CheckpointFileHeader) *
@@ -607,24 +603,10 @@ rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 
 	sscan = make_btree_seq_scan(&primary->desc, COMMITSEQNO_INPROGRESS, NULL);
 
-	heap_tuples = 0;
+	ntuples = 0;
 	ctid = 0;
-	while (true)
+	while (scan_getnextslot_allattrs(sscan, old_descr, primarySlot, &ntuples))
 	{
-		OTuple		primaryTup;
-		CommitSeqNo tupleCsn;
-		BTreeLocationHint hint;
-
-		primaryTup = btree_seq_scan_getnext(sscan, primarySlot->tts_mcxt, &tupleCsn , &hint);
-
-		if (O_TUPLE_IS_NULL(primaryTup))
-			break;
-
-		tts_orioledb_store_tuple(primarySlot, primaryTup, old_descr,
-								 COMMITSEQNO_INPROGRESS, PrimaryIndexNumber,
-								 true, &hint);
-
-		slot_getallattrs(primarySlot);
 		tts_orioledb_detoast(primarySlot);
 		tts_orioledb_toast(primarySlot, descr);
 
@@ -663,9 +645,7 @@ rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 		tts_orioledb_toast_sort_add(primarySlot, descr, toastSortState);
 
 		ExecClearTuple(primarySlot);
-		heap_tuples++;
 	}
-	index_tuples = heap_tuples;
 
 	ExecDropSingleTupleTableSlot(primarySlot);
 	free_btree_seq_scan(sscan);
@@ -703,7 +683,7 @@ rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 		tableRelation = table_open(o_table->oids.reloid, AccessExclusiveLock);
 		index_update_stats(tableRelation,
 						   true,
-						   heap_tuples);
+						   ntuples);
 
 		for (i = 0; i < o_table->nindices; i++)
 		{
@@ -887,7 +867,7 @@ rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 				table_close(pg_index, RowExclusiveLock);
 			}
 
-			index_update_stats(indexRelation, false, index_tuples);
+			index_update_stats(indexRelation, false, ntuples);
 			index_close(indexRelation, AccessExclusiveLock);
 		}
 
