@@ -574,7 +574,7 @@ void
 rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 				OTable *o_table, OTableDescr *descr)
 {
-	BTreeIterator *iter;
+	void 		*sscan;
 	OIndexDescr *primary,
 			   *idx;
 	Tuplesortstate **sortstates;
@@ -608,16 +608,17 @@ rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 													descr->indices[0],
 													work_mem, false, NULL);
 
-	iter = o_btree_iterator_create(&primary->desc, NULL, BTreeKeyNone,
-								   COMMITSEQNO_INPROGRESS, ForwardScanDirection);
+	sscan = make_btree_seq_scan(&primary->desc, COMMITSEQNO_INPROGRESS, NULL);
+
 	heap_tuples = 0;
 	ctid = 0;
 	while (true)
 	{
 		OTuple		primaryTup;
+		CommitSeqNo tupleCsn;
+		BTreeLocationHint hint;
 
-		primaryTup = o_btree_iterator_fetch(iter, NULL, NULL,
-											BTreeKeyNone, true, NULL);
+		primaryTup = btree_seq_scan_getnext(sscan, primarySlot->tts_mcxt, &tupleCsn , &hint);
 
 		if (O_TUPLE_IS_NULL(primaryTup))
 			break;
@@ -670,7 +671,7 @@ rebuild_indices(OTable *old_o_table, OTableDescr *old_descr,
 	index_tuples = heap_tuples;
 
 	ExecDropSingleTupleTableSlot(primarySlot);
-	btree_iterator_free(iter);
+	free_btree_seq_scan(sscan);
 
 	for (i = 0; i < descr->nIndices; i++)
 	{
