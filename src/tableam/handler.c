@@ -1155,7 +1155,7 @@ orioledb_parallelscan_reinitialize(Relation rel, ParallelTableScanDesc pscan)
 }
 
 
-TableScanDesc
+static TableScanDesc
 orioledb_beginscan(Relation relation, Snapshot snapshot,
 				   int nkeys, ScanKey key,
 				   ParallelTableScanDesc parallel_scan,
@@ -1224,14 +1224,14 @@ orioledb_rescan(TableScanDesc sscan, ScanKey key, bool set_params,
 	scan->scan = make_btree_seq_scan(&GET_PRIMARY(descr)->desc, scan->csn, NULL);
 }
 
-void
+static void
 orioledb_endscan(TableScanDesc sscan)
 {
 	OScanDesc	scan = (OScanDesc) sscan;
 
 	STOPEVENT(STOPEVENT_SCAN_END, NULL);
 
-	if ((scan->rs_base.rs_flags & SO_TEMP_SNAPSHOT) && (scan->rs_base.rs_snapshot->snapshot_type != SNAPSHOT_DIRTY))
+	if (scan->rs_base.rs_flags & SO_TEMP_SNAPSHOT)
 		UnregisterSnapshot(scan->rs_base.rs_snapshot);
 
 	if (scan->scan)
@@ -1272,7 +1272,7 @@ slot_keytest(TupleTableSlot *slot, int nkeys, ScanKey keys)
 	return true;
 }
 
-bool
+static bool
 orioledb_getnextslot(TableScanDesc sscan, ScanDirection direction,
 					 TupleTableSlot *slot)
 {

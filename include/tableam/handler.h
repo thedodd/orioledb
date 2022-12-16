@@ -138,9 +138,7 @@ extern void table_descr_dec_refcnt(OTableDescr *descr);
 extern Size orioledb_parallelscan_estimate(Relation rel);
 extern Size orioledb_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan);
 extern void orioledb_parallelscan_reinitialize(Relation rel, ParallelTableScanDesc pscan);
-extern TableScanDesc orioledb_beginscan(Relation relation, Snapshot snapshot, int nkeys, ScanKey key, ParallelTableScanDesc parallel_scan, uint32 flags);
-extern bool orioledb_getnextslot(TableScanDesc sscan, ScanDirection direction, TupleTableSlot *slot);
-extern void orioledb_endscan(TableScanDesc sscan);
+
 
 typedef enum
 {
