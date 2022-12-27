@@ -412,6 +412,19 @@ orioledb_ExecutorStart_hook(QueryDesc *queryDesc, int eflags)
 	UndoLocation	   *cur_undo_location;
 	MemoryContext		oldcxt;
 
+	/*
+	 * Don't do anything for read-only queries.  Especially helpful for cursors,
+	 * which could be many in-progress at the same time.
+	 */
+	if (queryDesc->operation == CMD_SELECT &&
+		queryDesc->plannedstmt->rowMarks == NIL)
+	{
+		if (prev_ExecutorStart)
+			return prev_ExecutorStart(queryDesc, eflags);
+		else
+			return standard_ExecutorStart(queryDesc, eflags);
+	}
+
 #ifdef USE_ASSERT_CHECKING
 	{
 		uint32	depth;
@@ -443,6 +456,16 @@ static void
 orioledb_ExecutorEnd_hook(QueryDesc *queryDesc)
 {
 	ListCell   *last;
+
+	/* See comment in orioledb_ExecutorStart_hook() */
+	if (queryDesc->operation == CMD_SELECT &&
+		queryDesc->plannedstmt->rowMarks == NIL)
+	{
+		if (prev_ExecutorStart)
+			return prev_ExecutorEnd(queryDesc);
+		else
+			return standard_ExecutorEnd(queryDesc);
+	}
 
 	last = list_tail(saved_undo_locations);
 	pfree(lfirst(last));
