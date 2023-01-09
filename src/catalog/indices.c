@@ -294,21 +294,31 @@ o_define_index_validate(Relation rel, IndexStmt *stmt,
 				for (i = 0; i < nfields; i++)
 				{
 					OTableIndexField   *pk_field;
-					OTableField		   *table_field;
+					OTableField		   *pk_table_field;
 					bool				member = false;
 					ListCell		   *lc;
 
 					pk_field = &o_table->indices[PrimaryIndexNumber].fields[i];
-					table_field = &o_table->fields[pk_field->attnum];
+					pk_table_field = &o_table->fields[pk_field->attnum];
 
 					foreach(lc, stmt->indexParams)
 					{
 						IndexElem *elem = lfirst(lc);
 
 						if (!elem->expr &&
-							strcmp(elem->name, table_field->name.data) == 0)
+							strcmp(elem->name, pk_table_field->name.data) == 0)
 						{
-							member = true;
+							OTableField	   *table_field;
+							Oid				opclass;
+
+							table_field = o_table_field_by_name(o_table,
+																elem->name);
+
+							opclass = ResolveOpClass(elem->opclass,
+													 table_field->typid,
+													 "btree",
+													 BTREE_AM_OID);
+							member = opclass == pk_field->opclass;
 							break;
 						}
 					}
@@ -319,7 +329,7 @@ o_define_index_validate(Relation rel, IndexStmt *stmt,
 							IndexElem *elem = lfirst(lc);
 
 							if (strcmp(elem->name,
-									   table_field->name.data) == 0)
+									   pk_table_field->name.data) == 0)
 							{
 								member = true;
 								break;
@@ -330,7 +340,7 @@ o_define_index_validate(Relation rel, IndexStmt *stmt,
 					{
 						IndexElem   *iparam = makeNode(IndexElem);
 
-						iparam->name = pstrdup(table_field->name.data);
+						iparam->name = pstrdup(pk_table_field->name.data);
 						iparam->expr = NULL;
 						iparam->indexcolname = NULL;
 						iparam->collation = NIL;
@@ -383,6 +393,10 @@ o_define_index(Relation rel, Oid indoid, bool reindex,
 	int16			indnatts;
 	int16			indnkeyatts;
 	OBTOptions	   *options;
+	int2vector	   *indkey;
+	Datum			datum;
+	bool			isnull;
+	oidvector	   *indclass;
 
 	index_rel = index_open(indoid, AccessShareLock);
 	if (context)
@@ -401,6 +415,14 @@ o_define_index(Relation rel, Oid indoid, bool reindex,
 				compress = o_parse_compress(str);
 		}
 	}
+
+	indkey = (int2vector *) PG_DETOAST_DATUM_COPY(&index_rel->rd_index->indkey);
+
+	/* Must get indclass the hard way */
+	datum = SysCacheGetAttr(INDEXRELID, index_rel->rd_indextuple,
+							Anum_pg_index_indclass, &isnull);
+	Assert(!isnull);
+	indclass = (oidvector *) PG_DETOAST_DATUM_COPY(datum);
 
 	if (index_rel->rd_index->indisprimary)
 		ix_type = oIndexPrimary;
@@ -510,37 +532,48 @@ o_define_index(Relation rel, Oid indoid, bool reindex,
 			index->npkeyfields = 0;
 			if (ix_type != oIndexPrimary && o_table->has_primary)
 			{
-				int				pknum;
+				int				fieldnum;
 				OTableIndex	   *primary;
+				Bitmapset	   *pkfields = NULL;
 
 				primary = &o_table->indices[PrimaryIndexNumber];
-				for (pknum = 0; pknum < primary->nfields; pknum++)
+
+				index->npkeyfields = primary->nfields;
+				for (fieldnum = 0; fieldnum < index->nfields; fieldnum++)
 				{
-					OTableIndexField   *pkfield = &primary->fields[pknum];
-					int					fieldnum;
-					bool				member = false;
-					int					pkey_start = index->nfields;
+					int				pknum;
+					AttrNumber		attnum;
+					bool			pkey_started = false;
 
-					for (fieldnum = 0; fieldnum < pkey_start; fieldnum++)
+					attnum = indkey->values[fieldnum];
+					for (pknum = 0; pknum < primary->nfields; pknum++)
 					{
-						AttrNumber		attnum;
+						OTableIndexField   *pkfield = &primary->fields[pknum];
 
-						attnum = index_rel->rd_index->indkey.values[fieldnum];
 						if (AttributeNumberIsValid(attnum) &&
-							attnum == pkfield->attnum + 1)
+							attnum == pkfield->attnum + 1 &&
+							(fieldnum >= index->nkeyfields ||
+							 indclass->values[fieldnum] == pkfield->opclass) &&
+							!bms_is_member(attnum, pkfields))
 						{
-							member = true;
+							pkfields = bms_add_member(pkfields, attnum);
+
+							if ((fieldnum >= index->nkeyfields) &&
+								((index->nfields - fieldnum) ==
+								 index->npkeyfields))
+								pkey_started = true;
+							else
+								index->npkeyfields--;
 							break;
 						}
-						pkey_start--;
 					}
-
-					if (!member)
-						index->npkeyfields++;
+					if (pkey_started)
+						break;
 				}
+				bms_free(pkfields);
 			} else if (ix_type == oIndexPrimary)
 			{
-				index->npkeyfields = indnatts;
+				index->npkeyfields = 0;
 			}
 
 			if (OCompressIsValid(compress))
@@ -613,29 +646,43 @@ o_define_index(Relation rel, Oid indoid, bool reindex,
 					OTableIndex	   *new_index = &o_table->indices[new_ix];
 					if (new_index->type != oIndexPrimary)
 					{
-						int	pknum;
+						int				fieldnum;
+						Bitmapset	   *pkfields = NULL;
+						OTableIndex	   *primary = index;
 
-						new_index->npkeyfields = 0;
-
-						for (pknum = 0; pknum < index->nfields; pknum++)
+						new_index->npkeyfields = primary->nfields;
+						for (fieldnum = 0; fieldnum < new_index->nfields; fieldnum++)
 						{
-							OTableIndexField *pkfield = &index->fields[pknum];
-							int fieldnum;
-							bool member = false;
+							int				pknum;
+							AttrNumber		attnum;
+							bool			pkey_started = false;
 
-							for (fieldnum = 0; fieldnum < new_index->nfields; fieldnum++)
+							attnum = new_index->fields[fieldnum].attnum;
+							for (pknum = 0; pknum < primary->nfields; pknum++)
 							{
-								OTableIndexField *field = &new_index->fields[fieldnum];
-								if (field->attnum == pkfield->attnum)
+								OTableIndexField   *pkfield = &primary->fields[pknum];
+
+								if (AttributeNumberIsValid(attnum) &&
+									attnum == pkfield->attnum + 1 &&
+									(new_index->fields[fieldnum].opclass ==
+									 pkfield->opclass) &&
+									!bms_is_member(attnum, pkfields))
 								{
-									member = true;
+									pkfields = bms_add_member(pkfields, attnum);
+
+									if ((fieldnum >= new_index->nkeyfields) &&
+										((new_index->nfields - fieldnum) ==
+										 new_index->npkeyfields))
+										pkey_started = true;
+									else
+										new_index->npkeyfields--;
 									break;
 								}
 							}
-
-							if (!member)
-								new_index->npkeyfields++;
+							if (pkey_started)
+								break;
 						}
+						bms_free(pkfields);
 
 						new_index->nfields += new_index->npkeyfields;
 					}

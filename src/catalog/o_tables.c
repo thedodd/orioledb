@@ -380,6 +380,8 @@ o_table_fill_index(OTable *o_table, OIndexNumber ix_num, Relation index_rel)
 	{
 		AttrNumber			attnum = index_rel->rd_index->indkey.values[keyno];
 		OTableIndexField   *ix_field;
+		bool				pk_member = false;
+		OTableIndexField   *primary_field = NULL;
 
 		ix_field = &index->fields[keyno];
 		if (AttributeNumberIsValid(attnum))
@@ -445,27 +447,38 @@ o_table_fill_index(OTable *o_table, OIndexNumber ix_num, Relation index_rel)
 		if (keyno >= pkey_start &&
 			o_table->has_primary && index->type != oIndexPrimary)
 		{
-			OTableIndexField *primary_field;
-
+			pk_member = true;
 			primary_field = &primary->fields[keyno - pkey_start];
-			ix_field->collation = primary_field->collation;
-			ix_field->opclass = primary_field->opclass;
-			ix_field->ordering = primary_field->ordering;
-			ix_field->nullsOrdering = primary_field->nullsOrdering;
 		}
 		else if (keyno >= index->nkeyfields)
 		{
-			OTableField	   *table_field = &o_table->fields[attnum - 1];
+			if (o_table->has_primary && index->type != oIndexPrimary)
+			{
+				int		pk_field;
 
-			/*
-			 * Included columns have no collation, no opclass and no ordering
-			 * options.
-			 */
-			ix_field->collation = InvalidOid;
-			ix_field->opclass = GetDefaultOpClass(table_field->typid,
-												  BTREE_AM_OID);
-			ix_field->ordering = SORTBY_DEFAULT;
-			ix_field->nullsOrdering = SORTBY_NULLS_DEFAULT;
+				for (pk_field = 0; pk_field < primary->nfields; pk_field++)
+				{
+					primary_field = &primary->fields[pk_field];
+
+					if (primary_field->attnum == ix_field->attnum)
+					{
+						pk_member = true;
+						break;
+					}
+				}
+			}
+
+			if (!pk_member)
+			{
+				/*
+				* Included columns have no collation, no opclass and no
+				* ordering options.
+				*/
+				ix_field->collation = InvalidOid;
+				ix_field->opclass = InvalidOid;
+				ix_field->ordering = SORTBY_DEFAULT;
+				ix_field->nullsOrdering = SORTBY_NULLS_DEFAULT;
+			}
 		}
 		else
 		{
@@ -486,6 +499,14 @@ o_table_fill_index(OTable *o_table, OIndexNumber ix_num, Relation index_rel)
 			{
 				ix_field->nullsOrdering = SORTBY_NULLS_FIRST;
 			}
+		}
+
+		if (pk_member)
+		{
+			ix_field->collation = primary_field->collation;
+			ix_field->opclass = primary_field->opclass;
+			ix_field->ordering = primary_field->ordering;
+			ix_field->nullsOrdering = primary_field->nullsOrdering;
 		}
 	}
 }

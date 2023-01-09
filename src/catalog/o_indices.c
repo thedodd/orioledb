@@ -188,7 +188,8 @@ make_ctid_o_index(OTable *table)
 	result->nLeafFields = table->nfields + 1;
 	result->nNonLeafFields = 1;
 	result->nPrimaryFields = 0;
-	result->nKeyFields = result->nUniqueFields = result->nNonLeafFields;
+	result->nKeyFields = 1;
+	result->nUniqueFields = 1;
 
 	result->leafFields = (OTableField *) palloc0(sizeof(OTableField) *
 												 result->nLeafFields);
@@ -244,7 +245,9 @@ make_primary_o_index(OTable *table)
 		result->compress = table->primary_compress;
 	result->nLeafFields = table->nfields;
 	result->nNonLeafFields = tableIndex->nfields;
+	result->nIncludedFields = tableIndex->nfields - tableIndex->nkeyfields;
 	result->nPrimaryFields = 0;
+	result->nKeyFields = tableIndex->nkeyfields;
 
 	result->leafFields = (OTableField *) palloc0(sizeof(OTableField) *
 												 result->nLeafFields);
@@ -263,7 +266,8 @@ make_primary_o_index(OTable *table)
 		result->nonLeafFields[j++] = tableIndex->fields[i];
 	}
 	Assert(j <= result->nNonLeafFields);
-	result->nKeyFields = result->nUniqueFields = result->nNonLeafFields = j;
+	result->nUniqueFields = j;
+	result->nNonLeafFields = j;
 
 	return result;
 }
@@ -277,10 +281,12 @@ add_index_fields(OIndex *index, OTable *table, OTableIndex *tableIndex, int *j,
 
 	if (tableIndex)
 	{
-		int	end = tableIndex->nfields;
+		int	end;
 
-		if (!fillPrimary)
-			end -= tableIndex->npkeyfields;
+		if (fillPrimary)
+			end = tableIndex->nkeyfields;
+		else
+			end = tableIndex->nfields - tableIndex->npkeyfields;
 		for (i = 0; i < end; i++)
 		{
 			int			attnum = tableIndex->fields[i].attnum;
@@ -289,7 +295,8 @@ add_index_fields(OIndex *index, OTable *table, OTableIndex *tableIndex, int *j,
 			k = find_existing_field(index, *j, &tableIndex->fields[i]);
 			if (k >= 0)
 			{
-				index->primaryFieldsAttnums[index->nPrimaryFields++] = k + 1;
+				if (fillPrimary)
+					index->primaryFieldsAttnums[index->nPrimaryFields++] = k + 1;
 				continue;
 			}
 
@@ -336,6 +343,8 @@ make_secondary_o_index(OTable *table, OTableIndex *tableIndex)
 	result->tableOids = table->oids;
 	result->primaryIsCtid = !table->has_primary;
 	result->compress = tableIndex->compress;
+	result->nIncludedFields = tableIndex->nfields - tableIndex->npkeyfields -
+							  tableIndex->nkeyfields;
 	result->nLeafFields = tableIndex->nfields - tableIndex->npkeyfields;
 	if (table->has_primary)
 		result->nLeafFields += primary->nfields;
@@ -346,6 +355,7 @@ make_secondary_o_index(OTable *table, OTableIndex *tableIndex)
 												 result->nLeafFields);
 	result->nonLeafFields = (OTableIndexField *) palloc0(sizeof(OTableIndexField) *
 														 result->nNonLeafFields);
+	result->nKeyFields = tableIndex->nkeyfields;
 
 	j = 0;
 	mcxt = OGetIndexContext(result);
@@ -357,10 +367,10 @@ make_secondary_o_index(OTable *table, OTableIndex *tableIndex)
 	MemoryContextSwitchTo(old_mcxt);
 	add_index_fields(result, table, tableIndex, &j, false);
 	Assert(j <= tableIndex->nfields);
-	result->nKeyFields = j;
 	add_index_fields(result, table, primary, &j, true);
 	Assert(j <= result->nLeafFields);
-	result->nLeafFields = result->nNonLeafFields = j;
+	result->nLeafFields = j;
+	result->nNonLeafFields = j;
 
 	if (tableIndex->type == oIndexUnique)
 		result->nUniqueFields = result->nKeyFields;
@@ -391,13 +401,16 @@ make_toast_o_index(OTable *table)
 	result->compress = table->toast_compress;
 	if (table->has_primary)
 	{
-		result->nLeafFields = primary->nfields;
-		result->nNonLeafFields = primary->nfields;
+		result->nLeafFields = primary->nkeyfields;
+		result->nNonLeafFields = primary->nkeyfields;
+		result->nKeyFields = primary->nkeyfields;
 	}
 	else
 	{
+		/* ctid_primary case */
 		result->nLeafFields = 1;
 		result->nNonLeafFields = 1;
+		result->nKeyFields = 1;
 	}
 	result->nLeafFields += TOAST_LEAF_FIELDS_NUM;
 	result->nNonLeafFields += TOAST_NON_LEAF_FIELDS_NUM;
@@ -418,6 +431,7 @@ make_toast_o_index(OTable *table)
 					   INT4_BTREE_OPS_OID);
 	j++;
 	Assert(j <= result->nNonLeafFields);
+	result->nUniqueFields = j;
 	result->nNonLeafFields = j;
 	make_builtin_field(&result->leafFields[j], NULL,
 					   BYTEAOID, "data", FirstLowInvalidHeapAttributeNumber,
@@ -425,9 +439,6 @@ make_toast_o_index(OTable *table)
 	j++;
 	Assert(j <= result->nLeafFields);
 	result->nLeafFields = j;
-
-	result->nKeyFields = result->nUniqueFields = result->nNonLeafFields;
-
 
 	return result;
 }
@@ -698,11 +709,14 @@ o_index_fill_descr(OIndexDescr *descr, OIndex *oIndex)
 	descr->nUniqueFields = oIndex->nUniqueFields;
 	descr->nFields = oIndex->nNonLeafFields;
 
+	descr->nKeyFields = oIndex->nKeyFields;
+	descr->nIncludedFields = oIndex->nIncludedFields;
 	for (i = 0; i < oIndex->nNonLeafFields; i++)
 	{
 		OIndexField *field = &descr->fields[i];
 		OTableIndexField *iField = &oIndex->nonLeafFields[i];
 		int			attnum = iField->attnum;
+		bool		add_opclass = false;
 
 		if (attnum == SelfItemPointerAttributeNumber)
 		{
@@ -735,8 +749,11 @@ o_index_fill_descr(OIndexDescr *descr, OIndex *oIndex)
 		{
 			field->nullfirst = (iField->nullsOrdering == SORTBY_NULLS_FIRST);
 		}
-		oFillFieldOpClassAndComparator(field, oIndex->tableOids.datoid,
-									   iField->opclass);
+
+		add_opclass = !OIgnoreColumn(descr, i);
+		if (add_opclass)
+			oFillFieldOpClassAndComparator(field, oIndex->tableOids.datoid,
+										   iField->opclass);
 	}
 
 	mcxt = OGetIndexContext(descr);
@@ -766,7 +783,7 @@ o_index_fill_descr(OIndexDescr *descr, OIndex *oIndex)
 	descr->nPrimaryFields = oIndex->nPrimaryFields;
 	memcpy(descr->primaryFieldsAttnums,
 		   oIndex->primaryFieldsAttnums,
-		   sizeof(descr->nPrimaryFields) * sizeof(descr->primaryFieldsAttnums[0]));
+		   descr->nPrimaryFields * sizeof(descr->primaryFieldsAttnums[0]));
 	descr->compress = oIndex->compress;
 
 	fillFixedFormatSpec(descr->leafTupdesc, &descr->leafSpec,
