@@ -470,160 +470,29 @@ o_define_index(Relation rel, ObjectAddress address,
 		LWLockRelease(&checkpoint_state->oTablesAddLock);
 }
 
-/* Private copy of _bt_parallel_estimate_shared */
-/*
- * Returns size of shared memory required to store state for a parallel
- * btree index build based on the snapshot its parallel scan will use.
- */
-static Size
-_o_parallel_estimate_shared(Relation heap, Snapshot snapshot)
-{
-	/* c.f. shm_toc_allocate as to why BUFFERALIGN is used */
-	return add_size(BUFFERALIGN(sizeof(BTShared)),
-					table_parallelscan_estimate(heap, snapshot));
-}
-
-/*
- * Private copy of _bt_parallel_scan_and_sort.
- * - calls orioledb-specific sort routines
- * (called by _bt_leader_participate_as_worker->_bt_parallel_scan_and_sort -> tuplesort_begin_index_btree)
- * - sharessort2, spool2 allocations removed
- * Perform a worker's portion of a parallel sort.
- *
- * This generates a tuplesort for passed btspool, and a second tuplesort
- * state if a second btspool is need (i.e. for unique index builds).  All
- * other spool fields should already be set when this is called.
- *
- * sortmem is the amount of working memory to use within each worker,
- * expressed in KBs.
- *
- * When this returns, workers are done, and need only release resources.
- */
-static void
-_o_parallel_scan_and_sort(BTSpool *btspool, BTSpool *btspool2,
-						   BTShared *btshared, Sharedsort *sharedsort,
-						   Sharedsort *sharedsort2, int sortmem, bool progress)
-{
-	SortCoordinate coordinate;
-	BTBuildState buildstate;
-	TableScanDesc scan;
-	double		reltuples;
-	IndexInfo  *indexInfo;
-
-	/* Initialize local tuplesort coordination state */
-	coordinate = palloc0(sizeof(SortCoordinateData));
-	coordinate->isWorker = true;
-	coordinate->nParticipants = -1;
-	coordinate->sharedsort = sharedsort;
-
-	/* Begin "partial" tuplesort */
-	btspool->sortstate = tuplesort_begin_orioledb_index(btspool->index,
-														work_mem, false, coordinate);
-
-	/* Fill in buildstate for _bt_build_callback() */
-	buildstate.isunique = btshared->isunique;
-	buildstate.havedead = false;
-	buildstate.heap = btspool->heap;
-	buildstate.spool = btspool;
-	buildstate.indtuples = 0;
-	buildstate.btleader = NULL;
-
-	/* Join parallel scan */
-	indexInfo = BuildIndexInfo(btspool->index);
-	indexInfo->ii_Concurrent = btshared->isconcurrent;
-	scan = table_beginscan_parallel(btspool->heap,
-									ParallelTableScanFromBTShared(btshared));
-
-	/* TODO make abstraction over scan_getnextslot_allattrs */
-	reltuples = table_index_build_scan(btspool->heap, btspool->index, indexInfo,
-									   true, progress, _bt_build_callback,
-									   (void *) &buildstate, scan);
-
-	/* Execute this worker's part of the sort */
-	if (progress)
-		pgstat_progress_update_param(PROGRESS_CREATEIDX_SUBPHASE,
-									 PROGRESS_BTREE_PHASE_PERFORMSORT_1);
-	tuplesort_performsort(btspool->sortstate);
-
-	/*
-	 * Done.  Record ambuild statistics, and whether we encountered a broken
-	 * HOT chain.
-	 */
-	SpinLockAcquire(&btshared->mutex);
-	btshared->nparticipantsdone++;
-	btshared->reltuples += reltuples;
-	if (buildstate.havedead)
-		btshared->havedead = true;
-	btshared->indtuples += buildstate.indtuples;
-	if (indexInfo->ii_BrokenHotChain)
-		btshared->brokenhotchain = true;
-	SpinLockRelease(&btshared->mutex);
-
-	/* Notify leader */
-	ConditionVariableSignal(&btshared->workersdonecv);
-
-	/* We can end tuplesorts immediately */
-	tuplesort_end(btspool->sortstate);
-}
-
-/* Private copy of _bt_leader_participate_as_worker.
- * Calls o_parallel_scan_and_sort instead of _bt_parallel_scan_and_sort
- */
-static void
-_bt_leader_participate_as_worker(BTBuildState *buildstate)
-{
-	BTLeader   *btleader = buildstate->btleader;
-	BTSpool    *leaderworker;
-	BTSpool    *leaderworker2;
-	int			sortmem;
-
-	/* Allocate memory and initialize private spool */
-	leaderworker = (BTSpool *) palloc0(sizeof(BTSpool));
-	leaderworker->heap = buildstate->spool->heap;
-	leaderworker->index = buildstate->spool->index;
-	leaderworker->isunique = buildstate->spool->isunique;
-
-	/* Initialize second spool, if required */
-	if (!btleader->btshared->isunique)
-		leaderworker2 = NULL;
-	else
-	{
-		/* Allocate memory for worker's own private secondary spool */
-		leaderworker2 = (BTSpool *) palloc0(sizeof(BTSpool));
-
-		/* Initialize worker's own secondary spool */
-		leaderworker2->heap = leaderworker->heap;
-		leaderworker2->index = leaderworker->index;
-		leaderworker2->isunique = false;
-	}
-
-	/*
-	 * Might as well use reliable figure when doling out maintenance_work_mem
-	 * (when requested number of workers were not launched, this will be
-	 * somewhat higher than it is for other workers).
-	 */
-	sortmem = maintenance_work_mem / btleader->nparticipanttuplesorts;
-
-	/* Perform work common to all participants */
-	_o_parallel_scan_and_sort(leaderworker, leaderworker2, btleader->btshared,
-							   btleader->sharedsort, btleader->sharedsort2,
-							   sortmem, true);
-
-#ifdef BTREE_BUILD_STATS
-	if (log_btree_build_stats)
-	{
-		ShowUsage("BTREE BUILD (Leader Partial Spool) STATISTICS");
-		ResetUsage();
-	}
-#endif							/* BTREE_BUILD_STATS */
-}
-
 /*
  * Private copy of _bt_begin_parallel.
  * - calls orioledb-specific sort routines
  * (called by _bt_leader_participate_as_worker->_bt_parallel_scan_and_sort -> tuplesort_begin_index_btree)
  * - sharedsort2, spool2 allocations removed
- * - memory context name modified
+ * - call workers starting at _o_index_parallel_build_main
+ * - call _o_index_parallel_estimate_shared just because it's static in PG
+ */
+/*
+ * Create parallel context, and launch workers for leader.
+ *
+ * buildstate argument should be initialized (with the exception of the
+ * tuplesort state in spools, which may later be created based on shared
+ * state initially set up here).
+ *
+ * isconcurrent indicates if operation is CREATE INDEX CONCURRENTLY.
+ *
+ * request is the target number of parallel worker processes to launch.
+ *
+ * Sets buildstate's BTLeader, which caller must use to shut down parallel
+ * mode by passing it to _bt_end_parallel() at the very end of its index
+ * build.  If not even a single worker process can be launched, this is
+ * never set, and caller should proceed with a serial index build.
  */
 static void
 _o_index_begin_parallel(BTBuildState *buildstate, bool isconcurrent, int request)
@@ -652,7 +521,7 @@ _o_index_begin_parallel(BTBuildState *buildstate, bool isconcurrent, int request
 	 */
 	EnterParallelMode();
 	Assert(request > 0);
-	pcxt = CreateParallelContext("postgres", "_o_parallel_build_main",
+	pcxt = CreateParallelContext("postgres", "_o_index_parallel_build_main",
 								 request);
 
 	scantuplesortstates = leaderparticipates ? request + 1 : request;
@@ -673,7 +542,8 @@ _o_index_begin_parallel(BTBuildState *buildstate, bool isconcurrent, int request
 	 * Estimate size for our own PARALLEL_KEY_BTREE_SHARED workspace, and
 	 * PARALLEL_KEY_TUPLESORT tuplesort workspace
 	 */
-	estoshared = _o_parallel_estimate_shared(btspool->heap, snapshot);
+	/* Calls orioledb_parallelscan_estimate via tableam handler */
+	estoshared = _o_index_parallel_estimate_shared(btspool->heap, snapshot);
 	shm_toc_estimate_chunk(&pcxt->estimator, estoshared);
 	estsort = tuplesort_estimate_shared(scantuplesortstates);
 	shm_toc_estimate_chunk(&pcxt->estimator, estsort);
@@ -779,6 +649,7 @@ _o_index_begin_parallel(BTBuildState *buildstate, bool isconcurrent, int request
 		btleader->nparticipanttuplesorts++;
 	btleader->btshared = btshared;
 	btleader->sharedsort = sharedsort;
+	btleader->sharedsort2 = NULL; // Not used anywhere
 	btleader->snapshot = snapshot;
 	btleader->walusage = walusage;
 	btleader->bufferusage = bufferusage;
@@ -795,7 +666,7 @@ _o_index_begin_parallel(BTBuildState *buildstate, bool isconcurrent, int request
 
 	/* Join heap scan ourselves */
 	if (leaderparticipates)
-		_o_leader_participate_as_worker(buildstate);
+		_o_index_leader_participate_as_worker(buildstate);
 
 	/*
 	 * Caller needs to wait for all launched workers when we return.  Make
@@ -804,7 +675,234 @@ _o_index_begin_parallel(BTBuildState *buildstate, bool isconcurrent, int request
 	WaitForParallelWorkersToAttach(pcxt);
 }
 
+/* Private copy just because _bt_parallel_estimate_shared is static*/
+/*
+ * Returns size of shared memory required to store state for a parallel
+ * btree index build based on the snapshot its parallel scan will use.
+ */
+static Size
+_o_index_parallel_estimate_shared(Relation heap, Snapshot snapshot)
+{
+	/* c.f. shm_toc_allocate as to why BUFFERALIGN is used */
+	return add_size(BUFFERALIGN(sizeof(BTShared)),
+					table_parallelscan_estimate(heap, snapshot));
+}
 
+
+/* Private copy of _bt_leader_participate_as_worker which is static in PG.
+ * - Calls o_index_parallel_scan_and_sort instead of _bt_parallel_scan_and_sort
+ * - sharedsort2, spool2 removed
+ */
+static void
+o_index_leader_participate_as_worker(BTBuildState *buildstate)
+{
+	BTLeader   *btleader = buildstate->btleader;
+	BTSpool    *leaderworker;
+	int			sortmem;
+
+	/* Allocate memory and initialize private spool */
+	leaderworker = (BTSpool *) palloc0(sizeof(BTSpool));
+	leaderworker->heap = buildstate->spool->heap;
+	leaderworker->index = buildstate->spool->index;
+	leaderworker->isunique = buildstate->spool->isunique;
+
+	/*
+	 * Might as well use reliable figure when doling out maintenance_work_mem
+	 * (when requested number of workers were not launched, this will be
+	 * somewhat higher than it is for other workers).
+	 */
+	sortmem = maintenance_work_mem / btleader->nparticipanttuplesorts;
+
+	/* Perform work common to all participants */
+	_o_index_parallel_scan_and_sort(leaderworker, btleader->btshared, btleader->sharedsort,
+							   sortmem, true);
+
+#ifdef BTREE_BUILD_STATS
+	if (log_btree_build_stats)
+	{
+		ShowUsage("BTREE BUILD (Leader Partial Spool) STATISTICS");
+		ResetUsage();
+	}
+#endif							/* BTREE_BUILD_STATS */
+}
+
+/* Private copy of _bt_parallel_build_main
+ * - sharedsort2, spool2 removed
+ * - calls _o_index_parallel_scan_and_sort
+ */
+/*
+ * Perform work within a launched parallel process.
+ */
+void
+_o_index_parallel_build_main(dsm_segment *seg, shm_toc *toc)
+{
+	char	   *sharedquery;
+	BTSpool    *btspool;
+	BTShared   *btshared;
+	Sharedsort *sharedsort;
+	Relation	heapRel;
+	Relation	indexRel;
+	LOCKMODE	heapLockmode;
+	LOCKMODE	indexLockmode;
+	WalUsage   *walusage;
+	BufferUsage *bufferusage;
+	int			sortmem;
+
+#ifdef BTREE_BUILD_STATS
+	if (log_btree_build_stats)
+		ResetUsage();
+#endif							/* BTREE_BUILD_STATS */
+
+	/*
+	 * The only possible status flag that can be set to the parallel worker is
+	 * PROC_IN_SAFE_IC.
+	 */
+	Assert((MyProc->statusFlags == 0) ||
+		   (MyProc->statusFlags == PROC_IN_SAFE_IC));
+
+	/* Set debug_query_string for individual workers first */
+	sharedquery = shm_toc_lookup(toc, PARALLEL_KEY_QUERY_TEXT, true);
+	debug_query_string = sharedquery;
+
+	/* Report the query string from leader */
+	pgstat_report_activity(STATE_RUNNING, debug_query_string);
+
+	/* Look up nbtree shared state */
+	btshared = shm_toc_lookup(toc, PARALLEL_KEY_BTREE_SHARED, false);
+
+	/* Open relations using lock modes known to be obtained by index.c */
+	if (!btshared->isconcurrent)
+	{
+		heapLockmode = ShareLock;
+		indexLockmode = AccessExclusiveLock;
+	}
+	else
+	{
+		heapLockmode = ShareUpdateExclusiveLock;
+		indexLockmode = RowExclusiveLock;
+	}
+
+	/* Open relations within worker */
+	heapRel = table_open(btshared->heaprelid, heapLockmode);
+	indexRel = index_open(btshared->indexrelid, indexLockmode);
+
+	/* Initialize worker's own spool */
+	btspool = (BTSpool *) palloc0(sizeof(BTSpool));
+	btspool->heap = heapRel;
+	btspool->index = indexRel;
+	btspool->isunique = btshared->isunique;
+
+	/* Look up shared state private to tuplesort.c */
+	sharedsort = shm_toc_lookup(toc, PARALLEL_KEY_TUPLESORT, false);
+	tuplesort_attach_shared(sharedsort, seg);
+
+	/* Prepare to track buffer usage during parallel execution */
+	InstrStartParallelQuery();
+
+	/* Perform sorting of spool, and possibly a spool2 */
+	sortmem = maintenance_work_mem / btshared->scantuplesortstates;
+	_o_index_parallel_scan_and_sort(btspool, btshared, sharedsort,
+							   sortmem, false);
+
+	/* Report WAL/buffer usage during parallel execution */
+	bufferusage = shm_toc_lookup(toc, PARALLEL_KEY_BUFFER_USAGE, false);
+	walusage = shm_toc_lookup(toc, PARALLEL_KEY_WAL_USAGE, false);
+	InstrEndParallelQuery(&bufferusage[ParallelWorkerNumber],
+						  &walusage[ParallelWorkerNumber]);
+
+#ifdef BTREE_BUILD_STATS
+	if (log_btree_build_stats)
+	{
+		ShowUsage("BTREE BUILD (Worker Partial Spool) STATISTICS");
+		ResetUsage();
+	}
+#endif							/* BTREE_BUILD_STATS */
+
+	index_close(indexRel, indexLockmode);
+	table_close(heapRel, heapLockmode);
+}
+
+/*
+ * Private copy of _bt_parallel_scan_and_sort which is static in PG
+ * - calls orioledb-specific sort routine (tuplesort_begin_orioledb_index)
+ * (called by _bt_leader_participate_as_worker->_bt_parallel_scan_and_sort -> tuplesort_begin_index_btree)
+ * - removed sharedsort2, spool2 from signature and from assignment in BTBuildState
+ * Perform a worker's portion of a parallel sort.
+ *
+ * This generates a tuplesort for passed btspool.  All
+ * other spool fields should already be set when this is called.
+ *
+ * sortmem is the amount of working memory to use within each worker,
+ * expressed in KBs.
+ *
+ * When this returns, workers are done, and need only release resources.
+ */
+static void
+_o_index_parallel_scan_and_sort(BTSpool *btspool, BTShared *btshared, Sharedsort *sharedsort,
+						   int sortmem, bool progress)
+{
+	SortCoordinate coordinate;
+	BTBuildState buildstate;
+	TableScanDesc scan;
+	double		reltuples;
+	IndexInfo  *indexInfo;
+
+	/* Initialize local tuplesort coordination state */
+	coordinate = palloc0(sizeof(SortCoordinateData));
+	coordinate->isWorker = true;
+	coordinate->nParticipants = -1;
+	coordinate->sharedsort = sharedsort;
+
+	/* Begin "partial" tuplesort */
+	btspool->sortstate = tuplesort_begin_orioledb_index(btspool->index,
+														work_mem, false, coordinate);
+
+	/* Fill in buildstate for _bt_build_callback() */
+	buildstate.isunique = btshared->isunique;
+	buildstate.havedead = false;
+	buildstate.heap = btspool->heap;
+	buildstate.spool = btspool;
+	buildstate.spool2 = NULL; // Is it used at all?
+	buildstate.indtuples = 0;
+	buildstate.btleader = NULL;
+
+	/* Join parallel scan */
+	indexInfo = BuildIndexInfo(btspool->index);
+	indexInfo->ii_Concurrent = btshared->isconcurrent;
+	scan = table_beginscan_parallel(btspool->heap,
+									ParallelTableScanFromBTShared(btshared));
+
+	/* TODO make abstraction over scan_getnextslot_allattrs */
+	reltuples = table_index_build_scan(btspool->heap, btspool->index, indexInfo,
+									   true, progress, _bt_build_callback,
+									   (void *) &buildstate, scan);
+
+	/* Execute this worker's part of the sort */
+	if (progress)
+		pgstat_progress_update_param(PROGRESS_CREATEIDX_SUBPHASE,
+									 PROGRESS_BTREE_PHASE_PERFORMSORT_1);
+	tuplesort_performsort(btspool->sortstate);
+
+	/*
+	 * Done.  Record ambuild statistics, and whether we encountered a broken
+	 * HOT chain.
+	 */
+	SpinLockAcquire(&btshared->mutex);
+	btshared->nparticipantsdone++;
+	btshared->reltuples += reltuples;
+	if (buildstate.havedead)
+		btshared->havedead = true;
+	btshared->indtuples += buildstate.indtuples;
+	if (indexInfo->ii_BrokenHotChain)
+		btshared->brokenhotchain = true;
+	SpinLockRelease(&btshared->mutex);
+
+	/* Notify leader */
+	ConditionVariableSignal(&btshared->workersdonecv);
+
+	/* We can end tuplesorts immediately */
+	tuplesort_end(btspool->sortstate);
+}
 
 static inline
 bool scan_getnextslot_allattrs(BTreeSeqScan *scan, OTableDescr *descr,
